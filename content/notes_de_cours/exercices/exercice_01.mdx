@@ -1,13 +1,167 @@
 ---
 sidebar_position: 1
 sidebar_label: Exercice 1
-description: Énoncé de l'exercice 1
+description: Évaluation diagnostique - une petite API HTTP en Node.js
 ---
 
-# Exercice 1
+# Exercice 1 — évaluation diagnostique
 
-:::info[Détails à venir]
+:::note[L'essentiel]
 
-L'énoncé de cet exercice sera publié ici.
+- **Durée** : environ une heure, en classe.
+- **Individuel** et **l'IA est permise**.
+- **Non noté.** Cet exercice sert à me montrer où en est le groupe.
+- **Remise** : un dépôt GitHub public, poussé avant la fin du cours, dont vous
+  déposez l'URL sur LÉA.
+- **Pour partir avant la fin** : poussez, puis venez m'expliquer votre code.
 
 :::
+
+L'IA est permise, mais un point de méthode qui vaut pour tout le cours : vous
+devez pouvoir expliquer chaque ligne de ce que vous remettez.
+
+## Ce que vous construisez
+
+Une petite API HTTP qui sert une collection de films gardée **en mémoire**. Pas
+de base de données, pas d'écriture sur disque : au démarrage, votre serveur lit
+`data/films.json` et travaille ensuite sur cette copie en mémoire.
+
+**Express ou le module `node:http`, à votre choix.** Ce que je vérifie, c'est le
+comportement HTTP, pas l'outil.
+
+## Les données
+
+Créez le fichier `data/films.json` avec exactement ce contenu :
+
+```json
+[
+  {"id": 1, "titre": "Le Déclin de l'empire américain", "annee": 1986, "realisateur": "Denys Arcand"},
+  {"id": 2, "titre": "Un 32 août sur terre", "annee": 1998, "realisateur": "Denis Villeneuve"},
+  {"id": 3, "titre": "Maelström", "annee": 2000, "realisateur": "Denis Villeneuve"},
+  {"id": 4, "titre": "La Grande Séduction", "annee": 2003, "realisateur": "Jean-François Pouliot"},
+  {"id": 5, "titre": "Incendies", "annee": 2010, "realisateur": "Denis Villeneuve"},
+  {"id": 6, "titre": "Monsieur Lazhar", "annee": 2011, "realisateur": "Philippe Falardeau"}
+]
+```
+
+Au moment de la correction, je remplace ce fichier par ma propre copie. Gardez
+donc le chemin et la structure tels quels, sinon votre serveur ne trouvera plus
+ses données.
+
+## Le contrat
+
+Toutes les réponses qui ont un corps sont en JSON. Une erreur a la forme
+`{"erreur": "un message"}` ; le message lui-même n'a pas d'importance.
+
+| Méthode | Chemin | Succès | Erreur |
+|---|---|---|---|
+| `GET` | `/api/films` | `200` — le tableau de tous les films | — |
+| `GET` | `/api/films?annee=2010` | `200` — le tableau des films de cette année, `[]` si aucun | `400` si `annee` n'est pas un entier |
+| `GET` | `/api/films/:id` | `200` — le film | `404` si l'`id` est inconnu ou n'est pas un entier |
+| `POST` | `/api/films` | `201` — le film créé, avec son `id` | `400` si le corps est invalide |
+| `DELETE` | `/api/films/:id` | `204` — sans corps | `404` si l'`id` est inconnu ou n'est pas un entier |
+
+Pour le `POST` :
+
+- le corps est du JSON ;
+- `titre` est obligatoire : une chaîne non vide ;
+- `annee` est obligatoire : un entier ;
+- `realisateur` est facultatif ;
+- l'`id` est attribué par le serveur — c'est le plus grand `id` existant, plus un ;
+- un `id` fourni par le client est ignoré.
+
+Après un `POST` réussi, le film doit apparaître dans `GET /api/films`. Après un
+`DELETE` réussi, il doit en disparaître.
+
+## Comment je lance votre serveur
+
+1. `npm install` à la racine du dépôt installe tout ce dont votre projet a besoin.
+   Autrement dit, vos dépendances sont bien déclarées dans `package.json`.
+2. `npm start` démarre le serveur.
+3. Le serveur écoute sur le port donné par la variable d'environnement `PORT`,
+   et sur `3000` si elle est absente.
+
+```js
+const port = process.env.PORT ?? 3000;
+```
+
+
+## Vous êtes sur Windows, je corrige sur Linux
+
+C'est là que se perdent les travaux qui « marchaient sur ma machine ». Cinq
+pièges, tous faciles à éviter une fois qu'on les connaît.
+
+**La casse compte.** Sous Windows, `data/Films.json` et `data/films.json`
+désignent le même fichier ; sous Linux, ce sont deux fichiers différents, et le
+second n'existe pas. C'est de loin la cause numéro un d'un serveur qui refuse de
+démarrer chez moi. Vérifiez la casse de vos noms de dossiers, de vos noms de
+fichiers et de vos `import`.
+
+**Pas de barre oblique inversée dans les chemins.** `'data\films.json'` ne mène
+nulle part sous Linux. La barre oblique normale, elle, fonctionne des deux
+côtés :
+
+```js
+await readFile('data/films.json', 'utf8');   // bien
+await readFile('data\films.json', 'utf8');  // Windows seulement
+```
+
+**Aucun chemin absolu.** `C:/Users/votre-nom/...` n'existe pas sur ma machine.
+
+**Un chemin relatif part du dossier d'où la commande est lancée**, pas du
+fichier qui le contient. Comme je lance `npm start` depuis la racine de votre
+dépôt, `'data/films.json'` fonctionne. Si vous voulez être à l'abri peu importe
+d'où le serveur est lancé, construisez le chemin à partir de votre module :
+
+```js
+import path from 'node:path';
+
+const fichier = path.join(import.meta.dirname, '..', 'data', 'films.json');
+```
+
+En CommonJS, c'est `__dirname` au lieu de `import.meta.dirname`.
+
+**Rien de propre à Windows dans `package.json`.** En particulier, ne fixez pas
+le port dans le script `start` :
+
+```json
+"start": "set PORT=3000 && node src/serveur.js"
+```
+
+`set` est une commande Windows ; sous Linux, ce script échoue. Votre script
+`start` ne doit rien faire d'autre que lancer Node.
+
+:::tip[Le test qui attrape tout]
+
+Clonez votre propre dépôt dans un autre dossier, puis lancez-le de là :
+
+```bash
+git clone <url-de-votre-depot> /tmp/verif
+cd /tmp/verif
+npm install
+npm start
+```
+
+Si ça démarre, c'est bon. Ce test attrape aussi le fichier que vous aviez oublié
+d'ajouter à Git : il est sur votre machine, mais pas dans votre dépôt.
+
+:::
+
+## Remise
+
+1. Créez un dépôt GitHub **public** — le nom est à votre choix.
+2. Poussez votre travail sur la branche par défaut (`main`) avant la fin du cours.
+3. Déposez l'URL de votre dépôt sur LÉA.
+
+Le dépôt doit être public ou ajouter `archambaultv` comme collaborateur s'il est privé.
+
+Ajoutez un `.gitignore` qui exclut `node_modules`.
+
+Poussez même si vous n'avez pas fini : un travail partiel me renseigne autant
+qu'un travail complet, et c'est exactement le but de l'exercice.
+
+## Partir avant la fin du cours
+
+Quand vous avez fini, poussez votre dépôt et faites-moi signe. Je viens
+vous voir, vous me faites visiter votre code, et vous êtes ensuite libre de
+partir.
