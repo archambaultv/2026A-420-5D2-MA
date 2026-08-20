@@ -11,9 +11,10 @@ description: Évaluation diagnostique - une petite API HTTP en Node.js
 - **Durée** : environ une heure, en classe.
 - **Individuel** et **l'IA est permise**.
 - **Non noté.** Cet exercice sert à me montrer où en est le groupe.
-- **Remise** : un dépôt GitHub public, poussé avant la fin du cours, dont vous
+- **Remise** : un dépôt GitHub public — ou privé si vous m'ajoutez comme
+  collaborateur (voir plus bas) —, poussé avant la fin du cours, dont vous
   déposez l'URL sur LÉA.
-- **Pour partir avant la fin** : poussez, puis venez m'expliquer votre code.
+- **Pour partir avant la fin** : poussez, levez la main, et expliquez-moi votre code.
 
 :::
 
@@ -26,8 +27,9 @@ Une petite API HTTP qui sert une collection de films gardée **en mémoire**. Pa
 de base de données, pas d'écriture sur disque : au démarrage, votre serveur lit
 `data/films.json` et travaille ensuite sur cette copie en mémoire.
 
-**Express ou le module `node:http`, à votre choix.** Ce que je vérifie, c'est le
-comportement HTTP, pas l'outil.
+**Express est obligatoire** : pas de `node:http` à la main. Il doit donc figurer
+dans les dépendances de votre `package.json`, pour que `npm install` l'installe
+chez moi.
 
 ## Les données
 
@@ -86,10 +88,9 @@ const port = process.env.PORT ?? 3000;
 ```
 
 
-## Vous êtes sur Windows, je corrige sur Linux
+## Vous êtes sur Windows, je suis sur Linux
 
-C'est là que se perdent les travaux qui « marchaient sur ma machine ». Cinq
-pièges, tous faciles à éviter une fois qu'on les connaît.
+Cinq pièges, tous faciles à éviter une fois qu'on les connaît.
 
 **La casse compte.** Sous Windows, `data/Films.json` et `data/films.json`
 désignent le même fichier ; sous Linux, ce sont deux fichiers différents, et le
@@ -149,11 +150,10 @@ d'ajouter à Git : il est sur votre machine, mais pas dans votre dépôt.
 
 ## Remise
 
-1. Créez un dépôt GitHub **public** — le nom est à votre choix.
+1. Créez un dépôt GitHub **public** — le nom est à votre choix. S'il est privé,
+   ajoutez-moi comme collaborateur : mon compte GitHub est `archambaultv`.
 2. Poussez votre travail sur la branche par défaut (`main`) avant la fin du cours.
 3. Déposez l'URL de votre dépôt sur LÉA.
-
-Le dépôt doit être public ou ajouter `archambaultv` comme collaborateur s'il est privé.
 
 Ajoutez un `.gitignore` qui exclut `node_modules`.
 
@@ -162,6 +162,5 @@ qu'un travail complet, et c'est exactement le but de l'exercice.
 
 ## Partir avant la fin du cours
 
-Quand vous avez fini, poussez votre dépôt et faites-moi signe. Je viens
-vous voir, vous me faites visiter votre code, et vous êtes ensuite libre de
-partir.
+Quand vous avez fini, poussez votre dépôt et levez la main. Je viens vous voir,
+vous me faites visiter votre code, et vous êtes ensuite libre de partir.
