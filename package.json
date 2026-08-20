@@ -1,0 +1,51 @@
+{
+  "name": "2026-a-420-5-d-2-ma",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "docusaurus": "docusaurus",
+    "start": "npm run start:g1",
+    "start:g1": "docusaurus start --config docusaurus.config.g1.js",
+    "start:g2": "docusaurus start --config docusaurus.config.g2.js",
+    "build": "npm run build:g1 && npm run build:g2 && npm run build:racine",
+    "build:g1": "docusaurus build --config docusaurus.config.g1.js --out-dir build/g1",
+    "build:g2": "docusaurus build --config docusaurus.config.g2.js --out-dir build/g2",
+    "build:racine": "cp racine/404.html static/img/logo-square.svg build/",
+    "serve": "npm run serve:g1",
+    "serve:g1": "docusaurus serve --config docusaurus.config.g1.js --dir build/g1",
+    "serve:g2": "docusaurus serve --config docusaurus.config.g2.js --dir build/g2 --port 3001",
+    "swizzle": "docusaurus swizzle",
+    "clear": "docusaurus clear",
+    "write-translations": "docusaurus write-translations",
+    "write-heading-ids": "docusaurus write-heading-ids"
+  },
+  "dependencies": {
+    "@docusaurus/core": "3.10.2",
+    "@docusaurus/faster": "3.10.2",
+    "@docusaurus/preset-classic": "3.10.2",
+    "@mdx-js/react": "^3.0.0",
+    "clsx": "^2.0.0",
+    "prism-react-renderer": "^2.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@docusaurus/module-type-aliases": "3.10.2",
+    "@docusaurus/types": "3.10.2"
+  },
+  "browserslist": {
+    "production": [
+      ">0.5%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 3 chrome version",
+      "last 3 firefox version",
+      "last 5 safari version"
+    ]
+  },
+  "engines": {
+    "node": ">=20.0"
+  }
+}

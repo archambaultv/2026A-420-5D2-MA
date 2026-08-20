@@ -1,0 +1,37 @@
+/**
+ * Any CSS included here will be global. The classic template
+ * bundles Infima by default. Infima is a CSS framework designed to
+ * work well for content-centric websites.
+ */
+
+.footer {
+    padding: 14px 0;
+}
+
+/* Overwrite infima medium shadow. */
+:root {
+    /* Original values */
+    /* --ifm-global-shadow-lw: 0 1px 2px 0 rgba(0, 0, 0, 0.1); */
+    /* --ifm-global-shadow-md: 0 5px 40px rgba(0, 0, 0, 0.2); */
+    /* --ifm-global-shadow-tl: 0 12px 28px 0 rgba(0, 0, 0, 0.2); */
+
+    /* New values */
+    --ifm-global-shadow-md: 0 5px 10px rgba(0, 0, 0, 0.2);
+}
+
+/**
+ * Pastille de groupe, dans la barre de navigation.
+ *
+ * Les deux groupes ont deux sites distincts, aux adresses voisines. La pastille
+ * est le repère qui permet de constater d'un coup d'œil qu'on est sur le bon,
+ * d'où le contour et la graisse. Elle reprend la couleur du texte de la barre
+ * de navigation, et suit donc le thème clair ou sombre.
+ */
+.navbar__groupe {
+    border: 2px solid var(--ifm-navbar-link-color);
+    border-radius: 999px;
+    padding: 0.1rem 0.7rem;
+    font-weight: 700;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}

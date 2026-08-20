@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Page introuvable — Applications web 2</title>
+<!--
+  Page 404 servie à la racine de GitHub Pages, au-dessus des deux sites de
+  groupe.
+
+  POURQUOI ELLE EXISTE
+      GitHub Pages ne sert que le 404.html situé à la racine du site : ceux que
+      Docusaurus produit dans g1/ et g2/ ne sont jamais affichés en production.
+      Sans ce fichier, tout lien mort — dans l'un ou l'autre groupe — tombe sur
+      la page 404 générique de GitHub, qui ne dit rien à un étudiant.
+
+  POURQUOI ELLE NE LISTE PAS LES DEUX GROUPES
+      Chaque groupe ne reçoit que l'adresse de son site. Offrir ici les deux
+      liens recréerait la page de sélection qu'on cherche justement à éviter,
+      et avec elle le risque de consulter l'échéancier du mauvais groupe.
+
+  Elle est autonome : pas de build, pas de feuille de style externe. Seul
+  logo-square.svg l'accompagne, copié à côté d'elle par `npm run build:racine`.
+-->
+<style>
+  :root {
+    --bois: #d8a15d;
+    --ardoise: #2f6b3f;
+    --liseré: #234a2b;
+    --craie: #f2f2f2;
+    --fond: #f5f2ec;
+    --texte: #2a2a2a;
+    --secondaire: #5c5c5c;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fond: #1b1b1d;
+      --texte: #ececec;
+      --secondaire: #b0b0b0;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1.25rem;
+    background: var(--fond);
+    color: var(--texte);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+  }
+
+  main {
+    max-width: 34rem;
+    text-align: center;
+  }
+
+  img {
+    width: 96px;
+    height: 96px;
+    margin-bottom: 1.5rem;
+  }
+
+  .code {
+    display: inline-block;
+    background: var(--ardoise);
+    border: 6px solid var(--bois);
+    border-radius: 12px;
+    color: var(--craie);
+    font-size: 2.5rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    padding: 0.4rem 1.4rem;
+    margin-bottom: 1.5rem;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+    margin: 0 0 1rem;
+  }
+
+  p {
+    margin: 0 0 1rem;
+    color: var(--secondaire);
+  }
+
+  strong { color: var(--texte); }
+
+  footer {
+    margin-top: 2rem;
+    font-size: 0.9rem;
+    color: var(--secondaire);
+  }
+
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <img src="/2026A-420-5D2-MA/logo-square.svg" alt="">
+  <div class="code">404</div>
+  <h1>Cette page n'existe pas</h1>
+  <p>
+    Le cours <strong>Applications web 2</strong> (420-5D2-MA) est donné à deux
+    groupes, et <strong>chaque groupe a son propre site</strong>. L'adresse que
+    vous avez suivie ne mène à aucune page.
+  </p>
+  <p>
+    Utilisez l'adresse transmise à votre groupe sur Omnivox, puis reprenez la
+    navigation à partir du menu du site.
+  </p>
+  <footer>
+    Un lien brisé sur le site du cours ? Écrivez-moi par MIO.<br>
+    Vincent Archambault-Bouffard, Collège de Maisonneuve.
+  </footer>
+</main>
+</body>
+</html>
