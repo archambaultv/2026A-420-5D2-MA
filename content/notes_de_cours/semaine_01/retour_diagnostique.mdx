@@ -1,0 +1,162 @@
+---
+sidebar_position: 1
+sidebar_label: Retour sur l'évaluation diagnostique
+description: Ce que les remises montrent, et ce qu'il faut retenir pour la suite
+---
+
+# Retour sur l'évaluation diagnostique
+
+J'ai cloné et **exécuté** chacune des remises des deux groupes. Le portrait
+d'ensemble : environ une remise sur quatre respecte le contrat de l'API de bout
+en bout, et **une remise sur quatre ne démarre pas du tout** — le serveur
+plante avant de répondre à sa première requête.
+
+Ce dernier chiffre est le plus important, parce qu'il ne mesure pas des
+connaissances : il mesure une habitude absente.
+
+:::tip
+
+**On ne pousse pas ce qu'on n'a pas lancé.** Écrire, lancer, regarder — à
+chaque changement.
+
+:::
+
+Les six familles d'erreurs vues dans les remises, de la plus fréquente à la
+plus subtile. Aucun extrait ci-dessous n'est tiré tel quel d'une remise.
+
+## 1. Le serveur qui ne démarre pas
+
+Trois causes vues plusieurs fois chacune :
+
+```js
+// ✘ La chaîne de requête n'appartient pas au chemin de la route.
+//   Express 5 refuse de démarrer (PathError).
+app.get("/api/films?annee=:annee", ...);
+
+// ✔ La chaîne de requête se lit dans req.query, la route reste /api/films.
+app.get("/api/films", (req, res) => {
+  const { annee } = req.query;
+  // ...
+});
+```
+
+La syntaxe `:param` reste la bonne — mais pour un **segment de chemin**, comme
+dans `/api/films/:id`. Elle ne sert jamais à décrire la chaîne de requête.
+
+```js
+// ✘ Un routeur défini dans routes/index.js… sans module.exports.
+//   app.use('/api/films', router) reçoit {} et Express plante.
+// ✔ Ne pas oublier la dernière ligne :
+module.exports = router;
+```
+
+Et le fichier de données renommé (`filmes.json`, `film.json`, `films.js`) : au
+moment de la correction, ma copie de `data/films.json` remplace la vôtre. Si
+votre code cherche un autre nom, il ne trouve plus rien. **Le contrat inclut
+les noms de fichiers.**
+
+## 2. L'ordre et l'unicité des routes
+
+```js
+// ✘ Deux routes GET sur le même chemin : seule la première répond.
+//   La seconde est du code mort — le filtre par année n'a jamais existé.
+app.get('/api/films', (req, res) => { /* liste */ });
+app.get('/api/films', (req, res) => { /* filtre par année */ });
+
+// ✘ /api/films/:annee déclaré avant /api/films/:id :
+//   la première route avale TOUTES les requêtes /api/films/….
+```
+
+Express essaie les routes **dans l'ordre de déclaration** et s'arrête à la
+première qui correspond. Deux conséquences : un chemin ne se déclare qu'une
+fois, et `/:annee` comme `/:id` correspondent exactement aux mêmes URL — c'est
+le même motif, seul le nom du paramètre change.
+
+## 3. La portée des variables
+
+```js
+// ✘ res n'existe pas ici : ReferenceError à la première requête.
+function estUnEntier(valeur) {
+  if (!Number.isInteger(Number(valeur))) {
+    return res.status(400).json({ erreur: 'pas un entier' });
+  }
+}
+
+// ✔ Une fonction d'aide renvoie un résultat ; c'est la ROUTE qui répond.
+function estUnEntier(valeur) {
+  return Number.isInteger(Number(valeur));
+}
+```
+
+Une fonction n'a accès qu'à ses paramètres et à ce qui l'entoure. Si elle a
+besoin de `res`, il faut le lui passer — ou, mieux, la laisser calculer et
+laisser la route décider de la réponse.
+
+## 4. La livraison
+
+La correction commence par `npm install` puis `node …` sur une machine qui
+n'est pas la vôtre. Vu dans les remises :
+
+- **pas de `package.json`** : `npm install` n'installe rien, `express`
+  introuvable, le serveur ne démarre pas — même si le code est parfait ;
+- **des paquets fantômes** : `npm install node const js json` installe de
+  vrais paquets npm qui portent ces noms et ne servent à rien.
+  `node:fs`, `path`, `const`… ne s'installent pas ;
+- **`node_modules/` versionné** (des centaines de fichiers). Le `.gitignore`
+  doit exister **avant** le premier `git add`, pas après ;
+- **`import` et `require` mélangés** dans le même fichier. Choisissez un mode
+  de module (`"type": "module"` → `import`) et tenez-vous-y.
+
+## 5. Le contrat, à la lettre
+
+L'énoncé fixait des codes de statut et des formes de réponse précis. Un client
+(ou un correcteur) programme contre ce contrat, pas contre vos intentions :
+
+- `204` veut dire **sans corps** — pas `200` avec un message de succès ;
+- « id inconnu ou pas un entier » → `404`, pas `400` : relire la table avant
+  de choisir ;
+- « en mémoire » veut dire **pas d'écriture sur disque**. Plusieurs remises
+  réécrivaient `films.json` à chaque requête — l'une contenait encore les
+  films d'essai de son auteur ;
+- le tableau demandé, pas `{ message: "...", data: [...] }` autour ;
+- `/api/films`, pas `/films`.
+
+## 6. La plus subtile : `{ id: nextId++, ...req.body }`
+
+Une seule remise, mais elle vaut une section. Le code valide `titre` et
+`annee`, puis construit le film ainsi :
+
+```js
+const nouveauFilm = { id: nextId++, ...req.body };
+```
+
+Dans un littéral d'objet, **la dernière écriture gagne**. Si le corps de la
+requête contient un `id`, il écrase celui que le serveur vient d'attribuer :
+`POST { "id": 99, "titre": "X", "annee": 2021 }` crée le film 99, alors que
+l'énoncé disait « un `id` fourni par le client est ignoré ».
+
+La forme générale du défaut : **on valide une chose, on enregistre une
+autre**. Le remède : construire l'objet champ par champ, à partir des
+variables validées.
+
+```js
+const { titre, annee, realisateur } = req.body;
+// ... validation de titre et annee ...
+
+const nouveauFilm = { id: nextId++, titre, annee };
+if (typeof realisateur === 'string') nouveauFilm.realisateur = realisateur;
+```
+
+Cette famille de failles a un nom : *mass assignment*.
+
+## À retenir
+
+1. On ne pousse pas ce qu'on n'a pas lancé.
+2. Un chemin de route ne contient jamais de `?` ; la chaîne de requête se lit
+   dans `req.query`.
+3. Une route par chemin ; Express s'arrête à la première correspondance.
+4. `npm install && node serveur.js` doit marcher **chez quelqu'un d'autre** :
+   `package.json` complet, `.gitignore` avant le premier `add`, noms de
+   fichiers du contrat respectés.
+5. Le contrat se relit ligne par ligne : codes, formes, chemins.
+6. Le serveur a le dernier mot sur les champs qui lui appartiennent.

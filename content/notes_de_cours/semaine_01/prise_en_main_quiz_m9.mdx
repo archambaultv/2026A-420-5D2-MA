@@ -1,0 +1,113 @@
+---
+sidebar_position: 2
+sidebar_label: Prise en main de Quiz M9
+description: Le guide d'accompagnement du squelette Quiz M9 de la semaine 1 — architecture et notions pour remplir les trous
+---
+
+# Prise en main du fil rouge Quiz M9
+
+**Cette page est le guide d'accompagnement du squelette
+[github.com/archambaultv/2026A-420-5D2-MA-QuizM9](https://github.com/archambaultv/2026A-420-5D2-MA-QuizM9),
+dans sa version de la semaine 1** : gardez-la ouverte pendant que vous le
+complétez. Quiz M9 évoluera chaque semaine ; ce qui est décrit ici est son
+point de départ.
+
+Tout le cours s'appuie sur **Quiz M9**, un jeu-questionnaire en direct : un
+animateur crée une partie et obtient un **code** ; les joueurs rejoignent avec
+ce code et un pseudonyme, sans compte ; les questions défilent, le classement
+monte. Cette semaine on en construit la version grossière — jouable, mais
+volontairement imparfaite.
+
+Le `README` du dépôt décrit les quatre trous à remplir et le contrat de l'API ;
+cette page rassemble les notions pour y arriver. Si vous n'avez pas pu
+compléter le squelette en classe, terminé à la maison (2 heures max), la solution
+sera publiée la semaine prochaine.
+
+## L'architecture de la semaine 1
+
+```
+navigateur (React, port 5173)          serveur (Express, port 3000)
+┌────────────────────────┐   fetch     ┌─────────────────────────────┐
+│  animateur OU joueur   │ ──────────► │  état des parties EN MÉMOIRE │
+│  sonde GET .../:code   │  toutes les │  questionnaire lu de quiz.db │
+│  toutes les secondes   │   secondes  │  (SQLite, au démarrage)      │
+└────────────────────────┘             └─────────────────────────────┘
+```
+
+Deux choix assumés, et leurs conséquences :
+
+- **L'état vit en mémoire** (une `Map` de parties). On redémarre le serveur,
+  tout est perdu. C'est le problème que la semaine 2 règle.
+- **Le client sonde en HTTP** (`setInterval` + `fetch`, chaque seconde). La
+  question apparaît jusqu'à une seconde en retard, le compte à rebours saute,
+  et l'onglet Réseau défile même quand il ne se passe rien. C'est le problème
+  que la semaine 7 règle.
+
+## La fonction pure de pointage
+
+Les règles (5 points la bonne réponse, jusqu'à 3 de rapidité, 2 pour la
+première bonne réponse, 0 hors délai — maximum 10) sont appliquées par une
+seule fonction :
+
+```js
+calculateScore({ isCorrect, responseTimeMs, questionDurationMs, isFirstCorrectAnswer })
+// → un entier entre 0 et 10
+```
+
+Elle est **pure** : elle ne lit ni l'horloge, ni la base, ni l'état de la
+partie — tout arrive en paramètre, et le même appel donne toujours le même
+résultat. C'est ce qui la rend testable seule (on l'exploitera la semaine 4)
+et digne d'être la seule autorité du pointage côté serveur (semaine 11).
+Remarquez que les temps viennent de l'horloge **du serveur** : la vitesse d'un
+joueur ne se mesure jamais avec l'horloge de son propre navigateur.
+
+## Lire SQLite avec node:sqlite
+
+Le questionnaire vient d'un fichier, `data/quiz.db` — pas d'un serveur de base
+de données. Node sait le lire nativement :
+
+```js
+import { DatabaseSync } from 'node:sqlite';
+
+const db = new DatabaseSync('data/quiz.db', { readOnly: true });
+const unQuiz = db.prepare('SELECT id, title FROM quiz LIMIT 1').get();
+const liste  = db.prepare('SELECT * FROM question WHERE quiz_id = ?').all(unQuiz.id);
+db.close();
+```
+
+- `.get(...)` → la première ligne (un objet), `.all(...)` → toutes les lignes
+  (un tableau) ;
+- le `?` est un **paramètre** : la valeur est passée à part, jamais collée
+  dans la chaîne SQL (on verra pourquoi c'est vital à la semaine 6) ;
+- la base dit `duration_seconds` et `is_correct` (0 ou 1) ; le code veut
+  `durationSeconds` et `isCorrect` (booléen) — la conversion vous appartient.
+
+## Les rappels utiles de la session passée
+
+**Express, côté API JSON** — `app.use(express.json())` une fois, puis dans
+chaque route : lire `req.params` / `req.query` / `req.body`, valider, répondre
+avec `res.status(...).json(...)`. Une erreur = `{ erreur: "un message" }` et
+le bon code (400 pour une demande invalide, 404 pour une ressource inconnue).
+
+**React, côté sondage** — un effet qui démarre une minuterie doit **toujours**
+la nettoyer :
+
+```js
+useEffect(() => {
+  const minuterie = setInterval(interroger, 1000);
+  return () => clearInterval(minuterie);   // sinon elles s'empilent
+}, [code]);
+```
+
+Un appel `async` dans un effet se protège d'un `try/catch` : si le serveur
+redémarre, on réessaie à la prochaine seconde au lieu de faire planter la
+page.
+
+## Jouer à deux, seul devant sa machine
+
+Ouvrez **deux navigateurs** (ou une fenêtre normale et une fenêtre privée) :
+l'animateur dans l'une, un joueur dans l'autre. Trois onglets si vous voulez
+voir un classement bouger. Le multijoueur ne demande aucun serveur public.
+
+Et gardez l'onglet Réseau ouvert pendant une partie : la dette de la
+semaine 1 se voit à l'œil nu. On la mesurera pour de bon à la semaine 7.
