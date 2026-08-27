@@ -1,5 +1,10 @@
 {
   "label": "Exercices",
-  "position": 1,
-  "collapsed": false
+  "position": 99,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "slug": "/exercices",
+    "description": "Les énoncés des exercices du cours."
+  }
 }

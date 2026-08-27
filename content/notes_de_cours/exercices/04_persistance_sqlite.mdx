@@ -1,0 +1,85 @@
+---
+sidebar_position: 4
+sidebar_label: 3. La partie survit au redémarrage
+description: "Quiz M9, semaine 2 : la partie survit au redémarrage (SQLite)"
+---
+
+# Exercice 3 : Base de données SQLite pour Quiz M9
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+## Étape 0 : récupérer la semaine 2
+
+Mettez à jour votre branche `main`. Je vous conseille ensuite de créer une
+branche pour votre travail de la semaine (`sem-02`).
+
+Pour vous aider, voir le tutoriel [Travailler avec deux dépôts distants](https://archambaultv.github.io/git/branche/deux_depots_distants).
+
+## Étape 1 : charger `schema.sql`
+
+- **Fichier** : `server/src/repository/db.js`
+- **Fonction** `initializeDatabase`.
+
+Dans cette étape, vous devez initialiser la base de données SQLite à partir du
+fichier `schema.sql` **si elle est vide**. Le `TODO` sur place décrit les
+quatre étapes. Vous pouvez consulter les pages [Rappel
+node:sqlite](/notes_de_cours/node_sqlite/rappel_node_sqlite) si besoin.
+
+**Vérifier.** `npm run verifier` : la section **Étape 1** devrait passer au complet.
+Dans le navigateur, vérifiez quele **Catalogue** affiche trois questionnaires.
+
+## Étape 2 : créer une partie
+
+- **Fichier** : `server/src/repository/games.js`
+- **Fonction** `createGame`.
+
+Dans cette étape, vous devez enregistrer une nouvelle partie dans la base de
+données, c'est-à-dire ajouter **une ligne à la table `game`**. Le `TODO` sur
+place décrit les colonnes à remplir. Prenez le temps de lire la fonction
+`recordAnswer`, plus bas dans le même fichier : elle vous sert de modèle pour
+toute écriture.
+
+**Vérifier.** `npm run verifier` : la section **Étape 2** devrait passer au
+complet. Remarquez que la vérification lit directement dans la base, sans
+passer par votre code. Dans le navigateur, choisissez un questionnaire du
+**Catalogue**, puis **Animer** : le salon d'attente devrait s'afficher avec
+un code.
+
+## Étape 3 : inscrire un joueur
+
+- **Fichier** : `server/src/repository/games.js`
+- **Fonction** `addPlayer`.
+
+Dans cette étape, vous devez inscrire un joueur dans une partie existante.
+Le travail ressemble beaucoup à celui de l'étape 2 : une écriture dans la
+table `player`, cette fois. Le `TODO` sur place précise ce qu'il faut
+fournir.
+
+**Vérifier.** `npm run verifier` : Vous devriez donc obtenir **44 sur 46**.
+Le deux tests manquants concernent la prochaine séance.
+
+## Vérifier votre travail
+
+Deux navigateurs (ou une fenêtre privée) :
+
+1. Animez une partie dans l'un, rejoignez-la dans l'autre, répondez à une ou
+   deux questions.
+2. Dans le terminal de `npm run dev` : `Ctrl+C`. Le serveur est mort, en
+   pleine partie.
+3. `npm run dev`, rechargez les deux pages.
+
+La partie est toujours là : joueurs, réponses, pointages.
+
+## En panne ?
+
+- `no such table: …` signifie que l'étape 1 n'est pas terminé, ou que le
+  serveur n'a pas redémarré.
+- `À faire.` dans le navigateur signifie que la fonction de l'étape 2 ou 3
+  n'est pas encore écrite : c'est le message des `TODO` restants.
+- Base dans un état étrange ? Arrêtez le serveur, supprimez
+  `server/data/quizm9.db`, redémarrez : elle se régénère, avec les
+  questionnaires de `seed.sql`.

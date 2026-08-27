@@ -1,18 +1,18 @@
 ---
 sidebar_position: 1
-sidebar_label: Exercice 1
+sidebar_label: 1. Évaluation diagnostique
 description: Évaluation diagnostique - une petite API HTTP en Node.js
 ---
 
-# Exercice 1 — évaluation diagnostique
+# Exercice 1 : évaluation diagnostique
 
 :::note[L'essentiel]
 
 - **Durée** : environ une heure, en classe.
 - **Individuel** et **l'IA est permise pour vous dépanner**.
 - **Non noté.** Cet exercice sert à me montrer où en est le groupe.
-- **Remise** : un dépôt GitHub public — ou privé si vous m'ajoutez comme
-  collaborateur (voir plus bas) —, poussé avant la fin du cours, dont vous
+- **Remise** : un dépôt GitHub public (ou privé si vous m'ajoutez comme
+  collaborateur, voir plus bas), poussé avant la fin du cours, dont vous
   déposez l'URL sur LÉA.
 - **Pour partir avant la fin** : poussez, levez la main, et expliquez-moi votre code.
 
@@ -57,11 +57,11 @@ Toutes les réponses qui ont un corps sont en JSON. Une erreur a la forme
 
 | Méthode | Chemin | Succès | Erreur |
 |---|---|---|---|
-| `GET` | `/api/films` | `200` — le tableau de tous les films | — |
-| `GET` | `/api/films?annee=2010` | `200` — le tableau des films de cette année, `[]` si aucun | `400` si `annee` n'est pas un entier |
-| `GET` | `/api/films/:id` | `200` — le film | `404` si l'`id` est inconnu ou n'est pas un entier |
-| `POST` | `/api/films` | `201` — le film créé, avec son `id` | `400` si le corps est invalide |
-| `DELETE` | `/api/films/:id` | `204` — sans corps | `404` si l'`id` est inconnu ou n'est pas un entier |
+| `GET` | `/api/films` | `200` avec le tableau de tous les films | aucune |
+| `GET` | `/api/films?annee=2010` | `200` avec le tableau des films de cette année, `[]` si aucun | `400` si `annee` n'est pas un entier |
+| `GET` | `/api/films/:id` | `200` avec le film | `404` si l'`id` est inconnu ou n'est pas un entier |
+| `POST` | `/api/films` | `201` avec le film créé, y compris son `id` | `400` si le corps est invalide |
+| `DELETE` | `/api/films/:id` | `204` sans corps | `404` si l'`id` est inconnu ou n'est pas un entier |
 
 Pour le `POST` :
 
@@ -69,7 +69,7 @@ Pour le `POST` :
 - `titre` est obligatoire : une chaîne non vide ;
 - `annee` est obligatoire : un entier ;
 - `realisateur` est facultatif ;
-- l'`id` est attribué par le serveur — c'est le plus grand `id` existant, plus un ;
+- l'`id` est attribué par le serveur : c'est le plus grand `id` existant, plus un ;
 - un `id` fourni par le client est ignoré.
 
 Après un `POST` réussi, le film doit apparaître dans `GET /api/films`. Après un
@@ -150,7 +150,7 @@ d'ajouter à Git : il est sur votre machine, mais pas dans votre dépôt.
 
 ## Remise
 
-1. Créez un dépôt GitHub **public** — le nom est à votre choix. S'il est privé,
+1. Créez un dépôt GitHub **public**. Le nom est à votre choix. S'il est privé,
    ajoutez-moi comme collaborateur : mon compte GitHub est `archambaultv`.
 2. Poussez votre travail sur la branche par défaut (`main`) avant la fin du cours.
 3. Déposez l'URL de votre dépôt sur LÉA.

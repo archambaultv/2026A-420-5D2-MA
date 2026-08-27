@@ -1,0 +1,163 @@
+---
+sidebar_position: 1
+sidebar_label: L'architecture
+description: "L'architecture de Quiz M9 : deux processus, sept pages, le chemin d'une donnée. Document vivant, mis à jour quand le dépôt change."
+---
+
+# L'architecture de Quiz M9
+
+Tout le cours s'appuie sur **Quiz M9**, un jeu-questionnaire en direct : un
+animateur crée une partie et obtient un **code** ; les joueurs rejoignent avec
+ce code et un pseudonyme, sans compte ; les questions défilent, le classement
+monte.
+
+**Cette page décrit le dépôt
+[github.com/archambaultv/2026A-420-5D2-MA-QuizM9](https://github.com/archambaultv/2026A-420-5D2-MA-QuizM9)
+dans sa version courante** : elle est mise à jour chaque fois que
+l'architecture change. Gardez-la ouverte pendant que vous travaillez dedans.
+
+*Dernière mise à jour : semaine 2.*
+
+## Deux processus
+
+`npm run dev` démarre **deux serveurs** :
+
+```
+┌──────────────────────────────┐        ┌──────────────────────────────┐
+│  client : port 5173          │        │  serveur : port 3000         │
+│  React Router mode framework │  /api  │  Express                     │
+│  rend les sept pages         │ ─────► │  route → moteur → repository │
+│  (HTML + React)              │        │            │                 │
+└──────────────────────────────┘        │            ▼                 │
+        ▲                               │  data/quizm9.db (SQLite)     │
+        │ http://localhost:5173         └──────────────────────────────┘
+     navigateur
+```
+
+- Le **serveur** (`server/`) ne parle que JSON : c'est l'API. Toutes les
+  données vivent chez lui, dans `quizm9.db`.
+- Le **client** (`client/`) rend les pages. Quand une page a besoin de
+  données, elles viennent **toujours** de l'API, jamais d'un accès direct à
+  la base.
+- En développement, les appels `fetch('/api/…')` du navigateur sont relayés
+  par Vite au port 3000 (voir `client/vite.config.js`).
+
+Le client tourne en **React Router mode framework**. C'est toujours du React
+(composants, props, `useState`, `useEffect`), mais chaque page a une
+**URL**.
+
+## Comment jouer en développement
+
+Ouvrez **deux navigateurs** (ou une fenêtre normale et une fenêtre privée) :
+l'animateur dans l'une, un joueur dans l'autre. Vous pouvez ajouter un deuxième
+joueur en ouvrant une autre fenêtre privée.
+
+## Les sept pages
+
+L'application Quiz M9 a sept pages. Le dossier `client/app/routes/`
+contient un fichier par page.
+
+| Page | URL | Fichier |
+|---|---|---|
+| Accueil | `/` | `home.jsx` |
+| Catalogue public | `/catalogue` | `catalogue.jsx` |
+| Liste d'animateur | `/quizzes` | `quizzes.jsx` |
+| Un questionnaire | `/quizzes/:id` | `quiz-details.jsx` |
+| Éditeur (maquette) | `/quizzes/:id/edit` | `quiz-edit.jsx` |
+| Salon d'attente | `/salon/:code` | `lobby.jsx` |
+| Salle de jeu | `/jeu/:code` | `game.jsx` |
+
+Le scénario d'une partie : l'animateur choisit un questionnaire dans le
+**catalogue** → tout le monde se retrouve au **salon** avec le code → la
+partie se joue dans la **salle de jeu**.
+
+L'éditeur est une maquette : créer et modifier un questionnaire depuis le
+navigateur, c'est la semaine 3.
+
+## Se repérer dans le dépôt
+
+Voici la structure du dépôt, avec les fichiers les plus importants.
+
+```
+server/
+  src/server.js          les routes de l'API
+  src/game.js            le moteur de jeu (états, échéances, pointage)
+  src/scoring.js         calculateScore, la fonction pure de pointage
+  src/repository/        TOUT le SQL
+  data/schema.sql        les sept tables, fourni au complet
+  data/seed.sql          les questionnaires de démonstration
+  data/quizm9.db         votre base locale (non versionnée)
+  verifier/              le harnais npm run verifier qui sert de tests unitaires
+client/
+  app/routes.js          une ligne par page
+  app/routes/            les sept pages
+  app/api.js             les appels fetch vers l'API
+  app/useGame.js         le sondage toutes les secondes
+```
+
+## Le chemin d'une requête
+
+Voici le parcours d'une requête, de l'interface du joueur jusqu'à la base de données :
+
+```
+navigateur
+   │  POST /api/games/747311/answers   { nickname, choiceId }
+   ▼
+route (server.js)          reçoit la requête, valide, répond en JSON
+   │
+   ▼
+moteur de jeu (game.js)    les règles : états, échéances, pointage
+   │
+   ▼
+repository/ (index.js)     TOUT le SQL, et rien d'autre que le SQL
+   │
+   ▼
+quizm9.db (SQLite)         la base de données
+```
+
+Chaque étage ne connaît que celui du dessous. La route ne fait pas de SQL ;
+le repository n'applique pas de règles de jeu ; le moteur ne lit jamais
+`req` ni n'écrit `res`.
+
+Suivons une première requête, `POST /api/games/:code/answers`, envoyée
+quand un joueur répond :
+
+1. **La route** (`server.js`) retrouve la partie
+   (`repository.findGameByCode`), vérifie qu'une question est en cours, que
+   le joueur existe, qu'il n'a pas déjà répondu, que le choix est valide.
+   Sinon : `400` et un message.
+2. Elle enregistre la réponse : `repository.recordAnswer(game.id, player.id,
+   question.id, choiceId, Date.now())`. L'horodatage est pris **ici**, sur
+   le serveur.
+3. **Le repository** exécute l'`INSERT INTO answer …` et retourne l'id.
+4. La ligne est dans le fichier `quizm9.db`. Le serveur peut redémarrer :
+   elle y sera encore.
+
+Suivons une deuxième requête, `POST /api/games/:code/next`, envoyée quand
+l'animateur clôt la question en cours :
+
+1. **La route** (`server.js`) retrouve la partie ; elle est en état
+   `question`, la route demande donc au moteur de la clore
+   (`closeQuestion`).
+2. **Le moteur** (`game.js`) relit toutes les réponses reçues
+   (`repository.getAnswersForQuestion`) et calcule les points de chacune
+   avec `calculateScore`, la fonction pure de `scoring.js`. Il déclenche
+   ensuite **trois écritures qui doivent réussir ensemble** : les points de
+   chaque réponse (`setAnswerPoints`), les totaux des joueurs
+   (`addPointsToPlayer`) et l'état de la partie (`updateGameState`).
+3. **Le repository** exécute le SQL de chaque appel, et rien d'autre : pas
+   de règles de jeu, pas de calcul de points. C'est aussi lui qui fournit la
+   **transaction**. Le moteur groupe ses trois appels dans
+   `repository.withTransaction(...)`, dont le `BEGIN`, le `COMMIT` et le
+   `ROLLBACK` sont écrits dans `repository/db.js` : tout passe, ou rien.
+4. La route répond l'état public de la partie : les joueurs voient les
+   résultats et le classement à jour.
+
+
+## Le temps réel de la partie
+
+Pour l'instant la partie ne se joue pas en temps réel : le navigateur interroge
+l'état de la partie **toutes les secondes** en HTTP (`useGame.js`,
+`setInterval` + `fetch`), même quand il ne se passe rien. C'est un choix assumé
+de la semaine 1. Une meilleure solution sera implantée à la semaine 7.
+

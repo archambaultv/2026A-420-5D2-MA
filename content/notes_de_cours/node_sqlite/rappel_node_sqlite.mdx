@@ -1,0 +1,112 @@
+---
+sidebar_position: 1
+sidebar_label: Rappel node:sqlite
+description: "Rappel node:sqlite : ouvrir, créer, lire, écrire, transactions"
+---
+
+# Rappel node:sqlite
+
+SQLite est une base de données **dans un fichier** : aucun serveur à
+installer, aucun mot de passe. Node sait lui parler sans rien installer non
+plus, avec le module `node:sqlite`.
+
+## Ouvrir la base
+
+```js
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('path/to/database.db');
+```
+
+Si le fichier n'existe pas, il est créé, vide. On ouvre la base **une seule
+fois**, au démarrage, et non à chaque requête.
+
+## Créer les tables si besoin
+
+`db.exec(...)` exécute un bloc de SQL d'un coup, sans résultat à récupérer.
+C'est l'outil pour charger un fichier de schéma :
+
+```js
+import { readFileSync } from 'node:fs';
+
+const schema = readFileSync('data/schema.sql', 'utf8');
+db.exec(schema);
+```
+
+Avec `CREATE TABLE IF NOT EXISTS`, ce chargement est **rejouable** : au
+premier démarrage il crée les tables, ensuite il ne fait rien. Pas de
+« table already exists ».
+
+## Lire des données
+
+`db.prepare(...)` prépare une requête ; ensuite `.get(...)` retourne **la
+première ligne** (ou `undefined`), `.all(...)` retourne **toutes les
+lignes** dans un tableau. Chaque ligne est un objet dont les clés sont les
+noms de colonnes.
+
+```js
+const quiz = db
+  .prepare('SELECT id, title FROM quiz WHERE id = ?')
+  .get(7);                       // { id: 7, title: '…' } ou undefined
+
+const questions = db
+  .prepare('SELECT id, text FROM question WHERE quiz_id = ? ORDER BY position')
+  .all(quiz.id);                 // [ { id: …, text: '…' }, … ]
+```
+
+Un `COUNT` se lit comme n'importe quelle ligne, mais donnez un nom à la
+colonne :
+
+```js
+const { n } = db.prepare('SELECT COUNT(*) AS n FROM quiz').get();
+```
+
+## Insérer des données
+
+Les `?` sont des **paramètres** : la valeur est passée à part, JAMAIS collée
+dans la chaîne SQL.
+
+```js
+const gameId = 7;           // normalement : req.params
+const nickname = 'Alice';   // normalement : req.body
+
+const resultat = db
+  .prepare('INSERT INTO player (game_id, nickname) VALUES (?, ?)')
+  .run(gameId, nickname);
+const playerId = resultat.lastInsertRowid;   // l'id attribué par SQLite
+```
+
+Pourquoi jamais de valeur collée dans la chaîne ? Parce qu'un pseudonyme
+comme `'); DROP TABLE player; --` deviendrait du SQL exécuté. C'est
+**l'injection SQL** : les paramètres la neutralisent, et on y revient à la
+semaine 11.
+
+## Mettre à jour des données
+
+Même mécanique, avec un `WHERE` :
+
+```js
+const gameId = 7;           // normalement : req.params
+const questionIndex = 2;    // normalement : calculé par le serveur
+
+db.prepare('UPDATE game SET question_index = ? WHERE id = ?')
+  .run(questionIndex, gameId);
+```
+
+## Transactions
+
+Plusieurs écritures qui doivent réussir **ensemble** (clore une question et
+inscrire les pointages, par exemple) s'enveloppent dans une transaction :
+
+```js
+db.exec('BEGIN');
+try {
+  // … les écritures …
+  db.exec('COMMIT');
+} catch (e) {
+  db.exec('ROLLBACK');
+  throw e;
+}
+```
+
+Si une écriture échoue en plein milieu, le `ROLLBACK` annule tout : la base
+ne reste jamais à moitié modifiée.

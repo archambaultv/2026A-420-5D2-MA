@@ -1,0 +1,64 @@
+---
+sidebar_position: 2
+sidebar_label: La base de données
+description: Comment Quiz M9 garde ses données
+---
+
+# La base de données de Quiz M9
+
+Tout l'état de Quiz M9 (questionnaires, parties, joueurs, réponses,
+pointages) vit dans **un seul fichier SQLite**, `server/data/quizm9.db`. Le
+serveur peut redémarrer en pleine partie : rien ne disparaît. C'est la seule
+source de vérité du jeu ; la mémoire du processus Node n'en garde aucune
+copie durable.
+
+*Dernière mise à jour : semaine 2.*
+
+## Tout le SQL derrière `repository/`
+
+Aucune requête SQL en dehors du module `server/src/repository/`. Ni les
+routes ni le moteur de jeu ne connaissent SQLite : ils appellent des
+fonctions (`findGameByCode`, `recordAnswer`, …) et reçoivent des objets.
+
+La raison : à la semaine 4, SQLite sera remplacé par PostgreSQL. Si tout le
+SQL est derrière `repository/`, le changement tient en quelques lignes. Si
+le SQL est éparpillé dans les routes, c'est une réécriture complète.
+
+## Le schéma
+
+Sept tables, définies dans `server/data/schema.sql`, qui serviront jusqu'à
+la fin de la session :
+
+```
+account ──< quiz ──< question ──< choice
+             │
+             └──< game ──< player ──< answer >── question
+```
+
+| Table | Rôle | À remarquer |
+|---|---|---|
+| `account` | les auteurs (comptes, semaine 5) | vide pour l'instant |
+| `quiz` | un questionnaire publié | appartiendra à un `account` |
+| `question` | une question, son ordre, sa durée | `position` la place dans le questionnaire |
+| `choice` | une réponse possible | `is_correct` : 0 ou 1 |
+| `game` | une partie en cours ou passée | le `code`, l'index de la question courante, l'état |
+| `player` | un pseudonyme dans une partie | pas un compte : il n'existe que dans sa partie |
+| `answer` | un choix d'un joueur à une question | porte un **horodatage du serveur** |
+
+Deux décisions à retenir :
+
+- **`answer.answered_at` vient de l'horloge du SERVEUR** (`Date.now()` côté
+  Node), jamais du navigateur. Le bonus de rapidité ne se négocie pas avec
+  l'horloge d'un client. On y revient à la semaine 11.
+- **`(game_id, player_id, question_id)` devrait être unique** : un joueur,
+  une réponse par question. La contrainte n'y est pas encore : pour
+  l'instant, c'est le serveur qui vérifie avant d'insérer. Retenez ce choix,
+  il refera surface à la semaine 11.
+
+:::tip[Remettre la base à zéro]
+
+Au démarrage, `initializeDatabase` charge `schema.sql`, puis `seed.sql` si
+la base est vide. C'est pourquoi supprimer `quizm9.db` suffit à repartir
+avec une base neuve, remplie des questionnaires de démonstration.
+
+:::

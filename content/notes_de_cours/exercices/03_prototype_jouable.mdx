@@ -1,0 +1,63 @@
+---
+sidebar_position: 3
+sidebar_label: 2. Le prototype jouable
+description: "Quiz M9, semaine 1 : le prototype jouable, quatre trous à remplir"
+---
+
+# Exercice 2 : Quiz M9, le prototype jouable
+
+:::note[L'essentiel]
+
+- **Semaine 1** du fil rouge [Quiz M9](https://github.com/archambaultv/2026A-420-5D2-MA-QuizM9).
+- **En classe**, puis terminé à la maison (2 h max) si nécessaire.
+- **Formatif** : rien à remettre, mais tout le reste de la session bâtit
+  dessus.
+- La solution est sur la branche `sol-01` du dépôt.
+
+:::
+
+La version **grossière** de Quiz M9 : l'état de la partie vit en mémoire, le
+questionnaire est lu dans un fichier SQLite, et le client interroge le serveur
+toutes les secondes en HTTP. Le guide d'accompagnement était la page
+« Prise en main de Quiz M9 », depuis fusionnée dans
+[L'architecture de Quiz M9](/notes_de_cours/quiz_m9/architecture), qui
+décrit la version courante du dépôt et non celle de cette semaine-là.
+
+> **Au départ, ça ne marche pas, et c'est normal.** Cliquer « Créer une
+> partie » affiche l'erreur « À faire. » : les routes du serveur sont des
+> trous à remplir. Jouer une partie complète devient possible une fois le
+> travail terminé.
+
+## Votre travail
+
+Quatre trous à remplir. Chacun est marqué `TODO` dans le code et décrit sur
+place ce qu'il attend. Dans l'ordre suggéré :
+
+1. **Implémenter `calculateScore`** dans `server/src/scoring.js`. C'est la
+   fonction **pure** qui applique les règles de pointage (voir le `README`
+   du dépôt). Les cinq premières vérifications du harnais la testent
+   directement, sans serveur : commencez ici.
+2. **Implémenter `loadQuiz`** dans `server/src/quiz.js`. C'est le `SELECT`
+   qui charge le questionnaire depuis `data/quiz.db` au démarrage. Les
+   requêtes SQL sont données en commentaire dans le fichier.
+3. **Implémenter les cinq routes** dans `server/src/server.js` : créer,
+   rejoindre, état, suivante, répondre, selon le contrat de l'API du
+   `README`. La logique de partie (`game.js`) est fournie ; les routes
+   l'assemblent.
+4. **Implémenter le sondage** dans `client/src/useGame.js` : le `fetch` de
+   l'état toutes les secondes avec `setInterval`. Tout le reste du client
+   est fourni.
+
+On ne touche à rien d'autre : les fichiers non marqués `TODO` sont fournis.
+
+## Vérifier
+
+Le serveur démarré dans un terminal (`npm run dev`), lancez dans un autre :
+
+```bash
+npm run verifier
+```
+
+Quand tout est en place : 24 ✔, et une partie complète se joue à deux
+navigateurs. La règle de la session : **on ne pousse pas ce qu'on n'a pas
+lancé**.

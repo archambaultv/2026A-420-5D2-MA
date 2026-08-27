@@ -13,7 +13,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 // à partir de ce fichier : `npm run build:g1` produit build/g1, `build:g2`
 // produit build/g2. Un étudiant ne reçoit que l'adresse de son groupe, et le
 // site qu'il reçoit ne contient aucune route vers l'échéancier de l'autre
-// groupe — ces pages ne sont tout simplement pas dans sa build. Personne ne
+// groupe : ces pages ne sont tout simplement pas dans sa build. Personne ne
 // peut donc lire la mauvaise date en croyant lire la sienne.
 //
 // Le contenu n'est pas dupliqué pour autant. Les deux sites montent les *mêmes*
@@ -27,7 +27,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 // groupes. Seules les dates de remise diffèrent, et elles viennent de
 // src/data/echeances.js via le composant <Echeance/>, qui lit le groupe du site
 // courant. Si un jour un énoncé doit réellement diverger, il suffira de sortir
-// ce fichier-là dans content/evaluations/g1 et g2 — la structure est déjà là.
+// ce fichier-là dans content/evaluations/g1 et g2 : la structure est déjà là.
 
 const ORG = 'archambaultv';
 const REPO = '2026A-420-5D2-MA';
@@ -63,7 +63,7 @@ export default function createConfig(groupe) {
   ];
 
   return {
-    title: `Applications web 2 — groupe ${groupe}`,
+    title: `Applications web 2, groupe ${groupe}`,
     tagline: 'Applications web 2',
     // Version carrée et simplifiée du logo : le cadre large de 5D2.svg est
     // illisible à 16-32px. Sert aussi de logo dans la barre de navigation.
@@ -130,7 +130,7 @@ export default function createConfig(groupe) {
         },
         // Carte de partage (aperçu dans MIO, Teams, Discord...). Doit être en PNG/JPG :
         // les réseaux sociaux ne rendent pas les SVG. Version rasterisée de la police
-        // Patrick Hand (SIL OFL 1.1) — c'est la police à réutiliser pour la régénérer.
+        // Patrick Hand (SIL OFL 1.1) : c'est la police à réutiliser pour la régénérer.
         image: 'img/social-card.png',
         colorMode: {
           respectPrefersColorScheme: true,

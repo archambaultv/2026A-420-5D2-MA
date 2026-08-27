@@ -1,6 +1,6 @@
 ---
-sidebar_position: 1
-sidebar_label: Retour sur l'évaluation diagnostique
+sidebar_position: 2
+sidebar_label: Retour sur le diagnostic
 description: Ce que les remises montrent, et ce qu'il faut retenir pour la suite
 ---
 
@@ -8,7 +8,7 @@ description: Ce que les remises montrent, et ce qu'il faut retenir pour la suite
 
 J'ai cloné et **exécuté** chacune des remises des deux groupes. Le portrait
 d'ensemble : environ une remise sur quatre respecte le contrat de l'API de bout
-en bout, et **une remise sur quatre ne démarre pas du tout** — le serveur
+en bout, et **une remise sur quatre ne démarre pas du tout** : le serveur
 plante avant de répondre à sa première requête.
 
 Ce dernier chiffre est le plus important, parce qu'il ne mesure pas des
@@ -16,7 +16,7 @@ connaissances : il mesure une habitude absente.
 
 :::tip
 
-**On ne pousse pas ce qu'on n'a pas lancé.** Écrire, lancer, regarder — à
+**On ne pousse pas ce qu'on n'a pas lancé.** Écrire, lancer, regarder. À
 chaque changement.
 
 :::
@@ -40,7 +40,7 @@ app.get("/api/films", (req, res) => {
 });
 ```
 
-La syntaxe `:param` reste la bonne — mais pour un **segment de chemin**, comme
+La syntaxe `:param` reste la bonne, mais pour un **segment de chemin**, comme
 dans `/api/films/:id`. Elle ne sert jamais à décrire la chaîne de requête.
 
 ```js
@@ -59,7 +59,7 @@ les noms de fichiers.**
 
 ```js
 // ✘ Deux routes GET sur le même chemin : seule la première répond.
-//   La seconde est du code mort — le filtre par année n'a jamais existé.
+//   La seconde est du code mort : le filtre par année n'a jamais existé.
 app.get('/api/films', (req, res) => { /* liste */ });
 app.get('/api/films', (req, res) => { /* filtre par année */ });
 
@@ -69,7 +69,7 @@ app.get('/api/films', (req, res) => { /* filtre par année */ });
 
 Express essaie les routes **dans l'ordre de déclaration** et s'arrête à la
 première qui correspond. Deux conséquences : un chemin ne se déclare qu'une
-fois, et `/:annee` comme `/:id` correspondent exactement aux mêmes URL — c'est
+fois, et `/:annee` comme `/:id` correspondent exactement aux mêmes URL : c'est
 le même motif, seul le nom du paramètre change.
 
 ## 3. La portée des variables
@@ -89,7 +89,7 @@ function estUnEntier(valeur) {
 ```
 
 Une fonction n'a accès qu'à ses paramètres et à ce qui l'entoure. Si elle a
-besoin de `res`, il faut le lui passer — ou, mieux, la laisser calculer et
+besoin de `res`, il faut le lui passer, ou mieux, la laisser calculer et
 laisser la route décider de la réponse.
 
 ## 4. La livraison
@@ -98,7 +98,7 @@ La correction commence par `npm install` puis `node …` sur une machine qui
 n'est pas la vôtre. Vu dans les remises :
 
 - **pas de `package.json`** : `npm install` n'installe rien, `express`
-  introuvable, le serveur ne démarre pas — même si le code est parfait ;
+  introuvable, le serveur ne démarre pas, même si le code est parfait ;
 - **des paquets fantômes** : `npm install node const js json` installe de
   vrais paquets npm qui portent ces noms et ne servent à rien.
   `node:fs`, `path`, `const`… ne s'installent pas ;
@@ -112,11 +112,11 @@ n'est pas la vôtre. Vu dans les remises :
 L'énoncé fixait des codes de statut et des formes de réponse précis. Un client
 (ou un correcteur) programme contre ce contrat, pas contre vos intentions :
 
-- `204` veut dire **sans corps** — pas `200` avec un message de succès ;
+- `204` veut dire **sans corps**, pas `200` avec un message de succès ;
 - « id inconnu ou pas un entier » → `404`, pas `400` : relire la table avant
   de choisir ;
 - « en mémoire » veut dire **pas d'écriture sur disque**. Plusieurs remises
-  réécrivaient `films.json` à chaque requête — l'une contenait encore les
+  réécrivaient `films.json` à chaque requête, et l'une contenait encore les
   films d'essai de son auteur ;
 - le tableau demandé, pas `{ message: "...", data: [...] }` autour ;
 - `/api/films`, pas `/films`.
