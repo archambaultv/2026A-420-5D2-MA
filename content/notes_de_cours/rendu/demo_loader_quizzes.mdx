@@ -1,0 +1,119 @@
+---
+sidebar_position: 3
+sidebar_label: "Démo pas à pas : le loader"
+description: "Refaire seul la démonstration : convertir /quizzes au rendu côté serveur"
+---
+
+# Démo pas à pas : le loader de `/quizzes`
+
+Cette page reproduit, étape par étape, la démonstration faite en classe :
+convertir la page **Mes questionnaires** (`/quizzes`) du rendu côté client
+au rendu côté serveur. Elle permet de refaire la démo par soi-même, par
+exemple après une absence. La théorie est dans
+[Le loader de React Router](/notes_de_cours/rendu/loader_react_router) ;
+la suite (le jalon ② à faire seul) est dans l'exercice
+[La page arrive déjà remplie](/notes_de_cours/exercices/rendu_cote_serveur).
+
+## Point de départ
+
+Dans votre dépôt Quiz M9, sur la branche `sem-02` :
+
+- les trois fonctions du `repository/` sont faites ;
+- `npm run dev` tourne dans un terminal (les deux serveurs) ;
+- `npm run verifier` donne **44 sur 46** : il ne manque que la section
+  **Partie 2**.
+
+## Étape 1 : constater le problème
+
+Ouvrez `http://localhost:5173/quizzes`, puis affichez le code source de la
+page (`Ctrl+U`). Cherchez le titre d'un questionnaire du seed, par exemple
+« SQL et SQLite » : **il n'y est pas**. La page a pourtant l'air pleine à
+l'écran ; c'est le JavaScript qui a fabriqué la liste dans le navigateur,
+après coup.
+
+## Étape 2 : écrire le loader
+
+Ouvrez `client/app/routes/quizzes.jsx` et écrivez, au-dessus du composant,
+l'export du `loader` :
+
+```jsx
+export async function loader() {
+  const response = await fetch('http://localhost:3000/api/quizzes');
+  if (!response.ok) {
+    throw new Error(`L'API répond ${response.status}.`);
+  }
+  return response.json();
+}
+```
+
+Chaque ligne a sa raison :
+
+- `export` : c'est **React Router** qui appelle cette fonction, pas nous.
+  Sans l'export, il ne la voit pas.
+- L'adresse complète `http://localhost:3000/...` : ce code tourne **sur le
+  serveur**, où le relais de Vite n'existe pas. Un chemin relatif
+  `/api/quizzes` n'y veut rien dire.
+- `return response.json()` : on retourne les données, et React Router se
+  charge de les apporter au composant.
+
+## Étape 3 : brancher le composant
+
+Dans le composant, remplacez les lignes `useState` et `useEffect` par une
+seule :
+
+```jsx
+export default function Quizzes() {
+  const quizzes = useLoaderData();
+  // ... le JSX, inchangé
+}
+```
+
+Puis nettoyez les imports en tête de fichier :
+
+```jsx title="avant"
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
+import { fetchQuizzes } from '../api.js';
+```
+
+```jsx title="après"
+import { Link, useLoaderData } from 'react-router';
+```
+
+Le JSX, lui, **ne bouge pas d'une ligne** : on n'a pas réécrit la page, on
+a changé le moment et le lieu où les données arrivent.
+
+## Étape 4 : recharger... et ne rien voir
+
+Sauvegardez, rechargez `/quizzes` : la page a l'air **identique**. C'est
+voulu. Rien n'a changé pour l'œil ; tout a changé pour le réseau.
+
+## Étape 5 : la preuve, trois fois
+
+1. **Le test de la source.** `Ctrl+U` sur `/quizzes`, cherchez
+   « SQL et SQLite » : cette fois, **il y est**, déjà en HTML.
+2. **L'onglet Réseau.** F12, onglet Réseau, rechargez : aucune requête
+   `/api/quizzes` ne part du navigateur. C'est le serveur qui a parlé à
+   l'API, avant d'envoyer la page.
+3. **Sans JavaScript.** Dans les outils de développement, ouvrez la
+   palette de commandes (`Ctrl+Shift+P`), tapez « Disable JavaScript »,
+   puis rechargez : la liste s'affiche quand même. Les liens fonctionnent
+   (ce sont de vrais `<a>`). Comparez avec `/catalogue`, qui reste sur
+   « Chargement… » : ses données arrivent par JavaScript. Réactivez
+   ensuite le JavaScript (« Enable JavaScript »).
+
+## Étape 6 : le harnais
+
+`npm run verifier` : **45 sur 46**. La première vérification de la section
+**Partie 2** passe. La dernière, c'est le jalon ② de l'exercice : la même
+conversion dans `quiz-details.jsx`, à faire par vous-même.
+
+## En panne ?
+
+- `fetch failed` ou `ECONNREFUSED` au rechargement : Express ne tourne
+  pas, ou l'adresse du `loader` est restée relative. Il faut
+  `http://localhost:3000/api/quizzes` au complet.
+- Page blanche et erreur autour de `useLoaderData` : la fonction `loader`
+  est écrite mais **pas exportée** (`export async function loader`).
+- Rien ne change au `Ctrl+U` : mauvais fichier (`catalogue.jsx` au lieu de
+  `quizzes.jsx`), ou sauvegarde manquante.

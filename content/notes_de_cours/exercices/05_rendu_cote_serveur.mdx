@@ -1,0 +1,88 @@
+---
+sidebar_position: 5
+sidebar_label: 4. La page arrive déjà remplie
+description: "Quiz M9, semaine 2 (suite) : rendu côté serveur avec un loader"
+---
+
+# Exercice 4 : rendu côté serveur avec un loader
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+Les pages de l'espace animateur (`/quizzes` et `/quizzes/:id`) partent vides
+et vont chercher leurs données dans le navigateur. Cette semaine, elles
+passent au rendu côté serveur : le HTML arrive déjà rempli. Les notes de
+cours à garder ouvertes : [Les modes de
+rendu](/notes_de_cours/rendu/modes_de_rendu) et [Le loader de React
+Router](/notes_de_cours/rendu/loader_react_router).
+
+## Étape 0 : partir du bon pied
+
+Continuez sur votre branche `sem-02` : cet exercice s'ajoute au travail de
+la dernière séance. Avant de commencer, `npm run verifier` (avec `npm run
+dev` qui tourne dans un autre terminal) devrait donner **44 sur 46** : les
+trois fonctions du `repository/` sont faites, il ne manque que la section
+**Partie 2**.
+
+Prenez ensuite trente secondes pour constater le problème : ouvrez
+`http://localhost:5173/quizzes`, puis affichez le code source de la page
+(`Ctrl+U`). Cherchez le titre d'un questionnaire : il n'y est pas.
+
+## Jalon ① : le loader de la liste
+
+- **Fichier** : `client/app/routes/quizzes.jsx`
+
+Le `TODO`
+sur place décrit les trois gestes : exporter `loader`, remplacer `useState`
+et `useEffect` par `useLoaderData()`, ne pas toucher au JSX. Attention à
+l'adresse : dans un `loader`, l'API s'appelle au complet,
+`http://localhost:3000/api/quizzes`.
+
+**Vérifier.** `Ctrl+U` sur `/quizzes` : les titres des questionnaires sont
+dans le HTML. `npm run verifier` : la première vérification de la section
+**Partie 2** passe (45 sur 46).
+
+## Jalon ② : le loader du détail
+
+- **Fichier** : `client/app/routes/quiz-details.jsx`
+
+Même conversion, en vous calquant sur le jalon ①, avec deux différences que
+le `TODO` sur place précise : le `loader` reçoit `{ params }` et `params.id`
+remplace `useParams()` ; et si l'API répond 404, levez `new
+Response('Questionnaire introuvable.', { status: 404 })` pour que la page
+réponde un vrai 404.
+
+**Vérifier.** `Ctrl+U` sur `/quizzes/2` : les questions et leurs choix sont
+dans le HTML. `http://localhost:5173/quizzes/999999` affiche une page
+d'erreur, pas un « Chargement… » éternel. `npm run verifier` : **46 sur
+46**.
+
+## Vérifier votre travail
+
+Le tour du propriétaire, pour voir la différence de vos yeux :
+
+1. `Ctrl+U` sur `/catalogue`, puis sur `/quizzes` : le premier n'a pas ses
+   données dans le HTML (rendu côté client, on le garde comme témoin), le
+   deuxième les a toutes.
+2. Outils de développement (F12), onglet Réseau, rechargez `/quizzes` :
+   aucune requête vers `/api/quizzes` ne part du navigateur. Rechargez
+   `/catalogue` : elle part, après la page.
+3. Toujours dans les outils de développement, désactivez JavaScript et
+   rechargez `/quizzes` : la liste s'affiche quand même. Réactivez-le
+   ensuite.
+
+## En panne ?
+
+- `fetch failed` ou `ECONNREFUSED` dans le terminal : le `loader` n'a pas
+  trouvé l'API. Est-ce que `npm run dev` tourne, et l'adresse est-elle bien
+  `http://localhost:3000/api/…` au complet ?
+- `useLoaderData` retourne `undefined` : la fonction `loader` n'est pas
+  **exportée** (`export async function loader`), ou ne retourne rien.
+- `window is not defined` ou `sessionStorage is not defined` : du code de
+  navigateur s'est glissé dans le `loader`, qui s'exécute sur le serveur.
+- La vérification de la Partie 2 échoue avec « client injoignable » : le
+  harnais lit le HTML sur `http://localhost:5173`, il faut que les **deux**
+  serveurs tournent.
