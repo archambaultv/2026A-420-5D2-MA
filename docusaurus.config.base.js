@@ -179,6 +179,11 @@ export default function createConfig(groupe) {
               position: 'right',
             },
             {
+              href: 'https://github.com/archambaultv/2026A-420-5D2-MA-QuizM9/tree/main',
+              label: 'Quiz M9',
+              position: 'right',
+            },
+            {
               href: REPO_URL,
               label: 'GitHub',
               position: 'right',
