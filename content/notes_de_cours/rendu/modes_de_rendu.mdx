@@ -1,0 +1,220 @@
+---
+sidebar_position: 1
+sidebar_label: Les modes de rendu
+description: "CSR, SSR, SSG, prérendu : où et quand le HTML est-il fabriqué ?"
+---
+
+# Les modes de rendu
+
+Le navigateur n'affiche jamais autre chose que du HTML (habillé de CSS,
+animé de JavaScript). Tous les « modes de rendu » répondent donc à une seule
+question :
+
+> **Où et quand ce HTML est-il fabriqué ?**
+
+Il y a quatre réponses possibles. Le rendu côté client, le rendu côté
+serveur, la génération statique et le prérendu.
+
+## Le test de la source
+
+Avant les définitions, l'outil qui permet de voir la différence :
+`Ctrl+U` (ou clic droit, « Afficher le code source de la page »).
+
+- **Le code source** (`Ctrl+U`) montre le HTML **tel que le serveur l'a
+  envoyé**, avant que le moindre JavaScript ne s'exécute.
+- **L'inspecteur** (F12, onglet Éléments) montre le document **tel qu'il est
+  maintenant**, après le travail du JavaScript.
+
+Quand les deux diffèrent, c'est que du JavaScript a fabriqué du HTML dans le
+navigateur.
+
+## Rendu côté client (CSR)
+
+*Client-Side Rendering* : le serveur envoie une page presque vide et du
+JavaScript ; c'est **le navigateur** qui va chercher les données et fabrique
+le HTML.
+
+```
+navigateur                              serveurs
+    │  GET /catalogue                       │
+    │◄──────────────  HTML minimal + JS ────┤
+    │  (page vide, « Chargement… »)         │
+    │  GET /api/quizzes                     │
+    │◄──────────────  JSON  ────────────────┤
+    │  le JS fabrique la liste              │
+    ▼  la page se remplit
+```
+
+C'est exactement ce que fait la page **Catalogue** de Quiz M9
+(`client/app/routes/catalogue.jsx`) : au premier rendu la liste est vide,
+puis `useEffect` appelle `fetch('/api/quizzes')` et `setQuizzes` remplit la
+page.
+
+**Avantages** : une fois l'application chargée, naviguer est
+instantané et l'interface peut réagir à tout ; le serveur, lui, ne sert que
+du JSON, ce qui est simple et léger.
+
+**Inconvénients** : le visiteur reçoit d'abord une page vide (le
+« Chargement… » qui clignote) ; il faut attendre le JavaScript, puis un
+deuxième aller-retour pour les données ; et un robot qui lit la page (moteur
+de recherche, aperçu de lien) ne voit à peu près rien.
+
+## Rendu côté serveur (SSR)
+
+*Server-Side Rendering* : **le serveur** exécute le code de la page, y met
+les données, et envoie un HTML déjà complet. Le navigateur a quelque chose à
+afficher dès la première réponse.
+
+```
+navigateur                              serveurs
+    │  GET /quizzes                         │
+    │                     le serveur exécute│
+    │                     le code de la page│
+    │                     et y met les données
+    │◄──────────  HTML complet + JS  ───────┤
+    │  la page est pleine dès l'arrivée     │
+    ▼  puis React « s'hydrate »
+```
+
+C'est ce que fait la page **Mes questionnaires** (`/quizzes`) de Quiz M9
+une fois convertie au SSR : le test de la source montre les titres,
+déjà en HTML. Comment on s'y prend avec React Router : voir
+[Le loader de React Router](/notes_de_cours/rendu/loader_react_router).
+
+### L'hydratation
+
+Le HTML envoyé par le serveur a un défaut : il est **inerte**. Ce ne sont
+que des balises et du texte. Un bouton « Commencer » y ressemble à un
+bouton, mais cliquer dessus ne fait rien : aucun écouteur d'événement n'y
+est attaché, et aucun état React (`useState`) n'existe encore dans le
+navigateur.
+
+D'où la deuxième moitié du travail. Avec le HTML, le serveur envoie aussi
+le JavaScript de l'application : le même code React qui vient de
+s'exécuter côté serveur. Quand ce JavaScript s'exécute dans le navigateur,
+React refait le rendu des composants, mais au lieu de créer de nouveaux
+éléments, il **compare** son résultat au HTML déjà présent dans la page.
+Pour chaque élément qui correspond, il « se branche » dessus : il attache
+les écouteurs d'événements (`onClick`, `onChange`, etc.), met en place
+l'état et programme les effets (`useEffect`). C'est ce processus qu'on
+appelle **l'hydratation** (*hydration*) : le HTML sec reçu du serveur est
+« réhydraté » par le JavaScript, qui lui redonne vie. Concrètement, c'est
+la fonction [`hydrateRoot`](https://fr.react.dev/reference/react-dom/client/hydrateRoot)
+de React qui fait ce travail ; React Router l'appelle pour vous.
+
+Deux conséquences pratiques à retenir :
+
+1. **Il y a un délai entre « visible » et « interactif ».** Dès la
+   première réponse, la page s'affiche ; mais tant que le JavaScript n'est
+   pas téléchargé, exécuté et l'hydratation terminée, les clics ne font
+   rien. Sur une bonne connexion c'est imperceptible ; sur un réseau lent,
+   on peut cliquer « dans le vide » pendant un instant.
+2. **Les deux rendus doivent concorder.** React s'attend à ce que le HTML
+   du serveur soit identique à ce que le premier rendu côté client aurait
+   produit. Un composant qui affiche par exemple `Date.now()` ou
+   `Math.random()` donnera deux résultats différents, et React signalera
+   dans la console une erreur d'*hydration mismatch* (« le HTML du serveur
+   ne correspond pas »). Si vous voyez cette erreur un jour, c'est ici
+   qu'il faut chercher.
+
+Après l'hydratation, la page se comporte exactement comme une application
+React ordinaire. Pour aller plus loin, la page
+[`hydrateRoot`](https://fr.react.dev/reference/react-dom/client/hydrateRoot)
+de la documentation officielle de React décrit le mécanisme
+en détail, y compris les cas d'erreur.
+
+**Avantages** : du contenu dès la première réponse, sans page blanche ;
+une page lisible par les robots et par un navigateur sans JavaScript.
+
+**Inconvénients** : le serveur travaille à chaque requête (il faut un
+serveur Node qui exécute du React) ; et l'interactivité, elle, attend quand
+même l'hydratation.
+
+### Le SSR n'a rien de nouveau
+
+Le rendu côté serveur a été la façon normale de faire du web pendant
+vingt ans, bien avant React : c'est le monde des **moteurs de gabarits**
+(EJS, Jinja, Blade), toujours bien vivant, et d'outils plus récents comme
+htmx qui le prolongent. Le terme « SSR » n'est devenu à la mode que quand
+le monde React a redécouvert ce que le monde PHP n'avait jamais cessé de
+faire. Une page entière y est consacrée :
+[Le web sans React](/notes_de_cours/rendu/web_sans_react).
+
+Retenez seulement ici pourquoi, quand **toute** la page est écrite en
+React, le SSR doit se faire « à la React » : pour que l'hydratation
+fonctionne, le HTML du serveur doit être identique à ce que les composants
+produiraient, et le seul programme capable de rendre un composant React,
+c'est React. Un moteur de gabarits ne peut pas le deviner. D'où
+l'obligation d'un serveur Node qui exécute vos composants, ce que React
+Router emballe pour nous.
+
+## Génération statique (SSG)
+
+*Static Site Generation* : le HTML est fabriqué **une seule fois, au moment
+du déploiement**, puis servi tel quel à tout le monde. Aucun code ne
+s'exécute au moment de la requête.
+
+Vous avez un exemple sous les yeux : **ce site de cours**. Il est écrit avec
+Docusaurus ; à chaque publication, un `npm run build` transforme les pages en
+fichiers HTML, déposés sur GitHub Pages. Le serveur ne fait que livrer des
+fichiers : c'est imbattable en vitesse et ça ne coûte presque rien.
+
+La limite est évidente : il faut que le contenu soit **connu d'avance et le
+même pour tout le monde**. Des notes de cours, oui ; la liste des joueurs
+d'une partie en cours, non.
+
+## Prérendu
+
+Le prérendu est un compromis : dans une application par ailleurs dynamique,
+**certaines routes** sont générées d'avance, à la construction, comme en
+SSG. React Router le permet (option `prerender` de la configuration) : on
+pourrait prérendre l'accueil de Quiz M9, dont le contenu ne dépend d'aucune
+donnée. Nous ne le ferons pas cette session ; retenez seulement que le choix
+du mode se fait **page par page**, pas application par application.
+
+## Quiz M9 : SSR ou CSR ?
+
+Dans Quiz M9, la configuration de React Router dit `ssr: true` : **toutes**
+les pages arrivent du serveur avec leur squelette déjà en HTML (le menu, le
+titre, le « Chargement… »). Le test de la source sur le Catalogue montre
+donc du HTML quand même, mais **pas les données**.
+
+La vraie question, page par page, n'est donc pas « y a-t-il du HTML ? » mais :
+
+> **Les données sont-elles dans le HTML envoyé, ou vont-elles être cherchées
+> par le navigateur après coup ?**
+
+C'est ce qui distingue le Catalogue (squelette rendu au serveur, données
+chargées au client) de `/quizzes` (données comprises dans le HTML, grâce au
+`loader`).
+
+## Choisir un mode : trois questions
+
+1. **Le contenu est-il connu au moment du déploiement, identique pour
+   tous ?** Oui : SSG ou prérendu. C'est le cas des notes de cours.
+2. **La première impression et le partage de l'URL comptent-ils ?** Une page
+   publique qu'on envoie par lien, qu'un moteur doit indexer, gagne à
+   arriver pleine : SSR.
+3. **Les données changent-elles pendant qu'on regarde la page ?** Le salon
+   d'attente et la salle de jeu changent chaque seconde : peu importe le
+   HTML initial, il faudra de toute façon parler au serveur en continu
+   (par sondage à intervalles réguliers, ou mieux, par une connexion
+   continue comme les WebSockets, vus plus loin dans le cours).
+
+| Mode | Qui fabrique le HTML | Quand | Exemple |
+|---|---|---|---|
+| CSR | le navigateur | après le chargement | Catalogue de Quiz M9 |
+| SSR | le serveur | à chaque requête | `/quizzes` de Quiz M9 |
+| SSG | l'outil de build | au déploiement | ce site de cours |
+| Prérendu | l'outil de build | au déploiement, pour certaines routes | (pas utilisé cette session) |
+
+:::info[Un seul « serveur » ? Non, deux.]
+
+Attention au mot « serveur ». Quiz M9 en a deux : l'API Express (port 3000)
+et le serveur du client React Router (port 5173). Le rendu côté serveur se
+passe sur le **serveur du client** : c'est lui qui exécute vos composants et
+fabrique le HTML. Express, lui, continue de ne parler que JSON, et personne
+d'autre que le `repository/` ne parle à la base. Le SSR n'a rien changé à la
+carte de la plomberie.
+
+:::

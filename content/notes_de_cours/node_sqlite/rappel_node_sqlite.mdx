@@ -77,8 +77,8 @@ const playerId = resultat.lastInsertRowid;   // l'id attribué par SQLite
 
 Pourquoi jamais de valeur collée dans la chaîne ? Parce qu'un pseudonyme
 comme `'); DROP TABLE player; --` deviendrait du SQL exécuté. C'est
-**l'injection SQL** : les paramètres la neutralisent, et on y revient à la
-semaine 11.
+**l'injection SQL** : les paramètres la neutralisent, et on y revient dans
+la portion du cours consacrée à la sécurité.
 
 ## Mettre à jour des données
 

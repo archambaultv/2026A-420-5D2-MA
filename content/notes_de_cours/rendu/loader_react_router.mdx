@@ -1,0 +1,182 @@
+---
+sidebar_position: 2
+sidebar_label: Le loader de React Router
+description: "Passer une page au rendu côté serveur : loader, useLoaderData, hydratation"
+---
+
+# Le loader de React Router
+
+Cette page montre un geste technique central : prendre une page qui
+charge ses données **dans le navigateur** et la faire rendre **par le
+serveur**.
+
+## Rappel : le mode framework
+
+Le client de Quiz M9 tourne en React Router **mode framework** :
+
+- `client/app/routes.js` : une ligne par page (le chemin, puis le fichier) ;
+- `client/react-router.config.js` : `ssr: true`, chaque page arrive du
+  serveur déjà rendue en HTML ;
+- chaque fichier de `client/app/routes/` est un **module de route** : il
+  exporte au minimum un composant, et peut exporter d'autres fonctions que
+  React Router appellera au bon moment. Le `loader` est la première d'entre
+  elles.
+
+## Avant : la version rendue côté client
+
+Dans sa version initiale, la page `/quizzes` part vide, puis va chercher ses données
+dans le navigateur :
+
+```jsx title="client/app/routes/quizzes.jsx (avant)"
+import { useEffect, useState } from 'react';
+import { fetchQuizzes } from '../api.js';
+
+export default function Quizzes() {
+  const [quizzes, setQuizzes] = useState([]);
+
+  useEffect(() => {
+    fetchQuizzes().then(setQuizzes).catch(() => {});
+  }, []);
+
+  return ( /* … la liste … */ );
+}
+```
+
+Séquence : rendu d'une liste vide, puis `useEffect`, puis `fetch`, puis
+`setQuizzes`, puis second rendu. Le test de la source (`Ctrl+U`) le
+confirme : les titres ne sont pas dans le HTML.
+
+## Après : la version rendue côté serveur
+
+```jsx title="client/app/routes/quizzes.jsx (après)"
+import { Link, useLoaderData } from 'react-router';
+
+export async function loader() {
+  // Ici, pas de relais Vite : on appelle l'API par son adresse complète.
+  const response = await fetch('http://localhost:3000/api/quizzes');
+  if (!response.ok) {
+    throw new Error(`L'API répond ${response.status}.`);
+  }
+  return response.json();
+}
+
+export default function Quizzes() {
+  const quizzes = useLoaderData();
+
+  return ( /* … la même liste, inchangée … */ );
+}
+```
+
+La conversion tient en trois gestes :
+
+1. **Exporter une fonction `loader`** qui va chercher les données et les
+   retourne. Elle s'exécute **sur le serveur, avant le rendu** du composant.
+2. **Dans le composant, lire les données avec `useLoaderData()`.**
+3. **Supprimer `useState`, `useEffect` et l'import de `api.js`** : il n'y a
+   plus de « page vide puis remplie », le composant reçoit ses données dès
+   son premier rendu.
+
+Le JSX, lui, ne change pas d'une ligne. C'est le point important : on n'a
+pas réécrit la page, on a déplacé le **moment** et le **lieu** où les
+données arrivent.
+
+## Où s'exécute le loader ?
+
+**Toujours sur le serveur du client** (le processus Node du port 5173),
+jamais dans le navigateur. Deux cas :
+
+- **Première visite** (on tape l'URL, on recharge) : le serveur exécute le
+  `loader`, rend le composant avec les données, et envoie un HTML complet.
+  Les données sont aussi sérialisées dans la page, pour que React n'ait pas
+  à les redemander en s'hydratant.
+- **Navigation dans l'application** (on clique un lien) : pas de
+  rechargement. Le navigateur demande au serveur d'exécuter le `loader` et
+  ne reçoit que les **données** ; React met la page à jour. Ouvrez l'onglet
+  Réseau en naviguant vers `/quizzes` : vous verrez passer une requête
+  `quizzes.data`.
+
+Dans les deux cas, le code du `loader` tourne côté serveur. C'est pour ça
+qu'il ne peut pas toucher à `window`, `document` ou `sessionStorage`.
+
+## Pourquoi `http://localhost:3000` au long ?
+
+Dans le navigateur, nos appels passent par `api.js` avec des chemins
+relatifs (`/api/quizzes`) : en développement, Vite relaie ces requêtes vers
+Express (voir `client/vite.config.js`). Ce relais n'existe que pour le
+navigateur. Le `loader`, lui, s'exécute côté serveur : un chemin relatif n'y
+veut rien dire, il faut l'adresse complète de l'API. C'est un appel de
+serveur à serveur :
+
+```
+navigateur ──► serveur du client (5173) ──► API Express (3000) ──► SQLite
+               exécute le loader,             toujours du JSON,
+               fabrique le HTML               tout le SQL derrière repository/
+```
+
+Le SSR ajoute une étape au chemin d'une requête, mais ne change rien aux
+règles : Express ne parle que JSON, et seul `repository/` parle à la base.
+
+:::info[Et l'adresse en dur, en pratique ?]
+
+Écrire `http://localhost:3000` dans le code est un raccourci d'exercice :
+cette adresse n'est vraie que sur votre poste. En pratique, on la sort du
+code avec une **variable d'environnement**. Le `loader` tourne côté
+serveur, il a donc accès à `process.env` :
+
+```js
+const API_URL = process.env.API_URL ?? 'http://localhost:3000';
+const response = await fetch(`${API_URL}/api/quizzes`);
+```
+
+En développement, la valeur par défaut suffit ; en production,
+l'hébergeur fournit la vraie adresse, souvent celle d'un réseau interne
+(avec Docker, ce serait `http://api:3000`, le nom du service). Et les
+frameworks full-stack vont plus loin : puisque le `loader` est déjà sur
+un serveur, ils sautent l'appel HTTP et lisent la base directement. Le
+détour par Express est un choix d'architecture de Quiz M9, pas une
+obligation du SSR.
+
+:::
+
+## Les paramètres d'URL
+
+Pour une route dynamique comme `/quizzes/:id`, le `loader` reçoit un objet
+avec les paramètres :
+
+```jsx title="client/app/routes/quiz-details.jsx (extrait)"
+export async function loader({ params }) {
+  const response = await fetch(`http://localhost:3000/api/quizzes/${params.id}`);
+  if (!response.ok) {
+    throw new Response('Questionnaire introuvable.', { status: 404 });
+  }
+  return response.json();
+}
+```
+
+`params.id` remplace le `useParams()` de la version côté client.
+
+## Les erreurs
+
+Deux façons d'échouer, deux effets différents :
+
+- `throw new Response('…', { status: 404 })` : React Router répond avec ce
+  code et affiche l'`ErrorBoundary` (défini dans `client/app/root.jsx`).
+  C'est la bonne réponse quand la ressource n'existe pas :
+  `/quizzes/999999` doit être un vrai 404, pas une page vide.
+- `throw new Error('…')` : erreur inattendue, code 500. C'est ce que fait le
+  `loader` de la liste si l'API ne répond pas.
+
+Dans la version côté client, un id inexistant laissait la page bloquée sur
+« Chargement… » pour toujours. Avec le `loader`, l'erreur a un code et un
+écran.
+
+:::tip[Vérifier qu'une page est bien rendue côté serveur]
+
+Deux vérifications, de la plus rapide à la plus complète :
+
+1. `Ctrl+U` sur la page : les données sont dans le HTML.
+2. Outils de développement, « Désactiver JavaScript », recharger : la page
+   s'affiche quand même (les boutons, eux, sont morts : l'hydratation n'a
+   pas eu lieu).
+
+:::
