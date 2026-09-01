@@ -1,0 +1,60 @@
+---
+sidebar_position: 5
+sidebar_label: 4. Quel mode de rendu pour quelle page de Quiz M9 ?
+description: "Classer les six pages de Quiz M9 par mode de rendu"
+---
+
+# Exercice 4 : quel mode de rendu pour quelle page de Quiz M9 ?
+
+:::info
+
+Ceci est un exercice formatif en équipe de 2 ou 3 personnes. Il n'y a rien à
+remettre.
+
+:::
+
+Les quatre modes de rendu sont : CSR, SSR, SSG, prérendu. La question qui
+compte maintenant : lequel choisir pour chaque page de Quiz M9 ? Le choix se
+fait **page par page**.
+
+## Les six pages
+
+| Page | Adresse | Ce qu'elle affiche |
+|---|---|---|
+| Accueil | `/` | le formulaire pour joindre une partie |
+| Catalogue public | `/catalogue` | les questionnaires publiés, pour tous les visiteurs |
+| Liste de l'animateur | `/quizzes` (et le détail `/quizzes/:id`) | les questionnaires de l'animateur, leurs questions |
+| Éditeur de questionnaire | `/quizzes/:id/edit` | un formulaire de création et d'édition (à venir, semaine 3) |
+| Salon d'attente | `/salon/:code` | les joueurs qui rejoignent la partie |
+| Salle de jeu | `/jeu/:code` | la question en cours, puis les pointages |
+
+## Consigne
+
+En dyades, **15 minutes**. Pour chaque page, répondez aux trois questions
+des notes de cours :
+
+1. Le contenu est-il **connu au moment du déploiement**, identique pour
+   tous ?
+2. La **première impression** et le **partage de l'URL** comptent-ils
+   (lien envoyé, moteur de recherche) ?
+3. Les données **changent-elles pendant qu'on regarde** la page ?
+
+Puis proposez un mode (CSR, SSR, SSG ou prérendu) et notez **l'argument**
+qui tranche, en une phrase. Si vous hésitez entre deux modes, notez les
+deux : les cas limites sont les plus intéressants pour la mise en commun.
+
+## Mise en commun
+
+On construit le tableau ensemble au tableau, page par page, arguments à
+l'appui. Ce tableau sera recopié dans les notes de cours et resservira
+jusqu'à la fin de la session : chaque fois qu'une page s'ajoute à Quiz M9,
+la même grille de trois questions s'applique.
+
+Deux questions pour vérifier votre classement avant la mise en commun :
+
+- Y a-t-il une page où le HTML initial, quel que soit son contenu, sera
+  périmé une seconde après son arrivée ? Que reste-t-il alors du choix du
+  mode de rendu ?
+- Le test de la source (`Ctrl+U`) sur `/catalogue` correspond-il au mode
+  que vous venez de proposer pour cette page ? Si non, qui a raison :
+  vous, ou le code actuel ?
