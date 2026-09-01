@@ -1,0 +1,49 @@
+---
+sidebar_position: 5
+sidebar_label: 4. Quel mode de rendu pour quelle page de Quiz M9 ?
+description: "Classer les six pages de Quiz M9 par mode de rendu"
+---
+
+# Exercice 4 : quel mode de rendu pour quelle page de Quiz M9 ?
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à
+remettre.
+
+:::
+
+Les quatre modes de rendu sont : CSR, SSR, SSG, prérendu. La question qui
+compte maintenant : lequel choisir pour chaque page de Quiz M9 ? Le choix se
+fait **page par page**.
+
+## Les six pages
+
+| Page | Adresse | Ce qu'elle affiche |
+|---|---|---|
+| Accueil | `/` | le formulaire pour joindre une partie |
+| Catalogue public | `/catalogue` | les questionnaires publiés, pour tous les visiteurs |
+| Liste de l'animateur | `/quizzes` (et le détail `/quizzes/:id`) | les questionnaires de l'animateur, leurs questions |
+| Éditeur de questionnaire | `/quizzes/:id/edit` | un formulaire de création et d'édition (à venir, semaine 3) |
+| Salon d'attente | `/salon/:code` | les joueurs qui rejoignent la partie |
+| Salle de jeu | `/jeu/:code` | la question en cours, puis les pointages |
+
+## Consigne
+
+En équipe de 2 ou 3 personnes, **15 minutes**. Pour chaque page, répondez aux
+trois questions des notes de cours :
+
+1. Le contenu est-il **connu au moment du déploiement**, identique pour
+   tous ?
+2. La **première impression** et le **partage de l'URL** comptent-ils
+   (lien envoyé, moteur de recherche) ?
+3. Les données **changent-elles pendant qu'on regarde** la page ?
+
+Puis proposez un mode (CSR, SSR, SSG ou prérendu) et notez pourquoi en une
+phrase. Si vous hésitez entre deux modes, notez les deux : les cas limites sont
+les plus intéressants pour la mise en commun.
+
+## Mise en commun
+
+Retour en grand groupe : pour chaque page chaque équipe présente ses choix et
+ses arguments.

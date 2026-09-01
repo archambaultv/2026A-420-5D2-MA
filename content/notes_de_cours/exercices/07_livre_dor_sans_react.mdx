@@ -1,0 +1,180 @@
+---
+sidebar_position: 7
+sidebar_label: 6. Le livre d'or, sans React
+description: "Express, EJS et htmx : le rendu côté serveur sans React"
+---
+
+# Exercice 6 : le livre d'or, sans React
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+Nous allons construire une petite application qui fait du rendu côté serveur
+avec Express + EJS + htmx. Vous pouvez consulter la page [Le web sans
+React](/notes_de_cours/rendu/web_sans_react) pour vous aider.
+
+## Étape 0 : partir du bon pied
+
+```bash
+git clone https://github.com/archambaultv/2026A-420-5D2-MA-ssr-htmx.git
+cd 2026A-420-5D2-MA-ssr-htmx
+npm install
+npm run dev
+```
+
+L'application écoute sur `http://localhost:8080` (elle peut tourner en même
+temps que Quiz M9). Ouvrez-la : pour l'instant, la route `GET /` répond du
+JSON brut. C'est le point de départ.
+
+## Jalon ① : le gabarit
+
+- **Fichiers** : `server.js` (route `GET /`) et `views/index.ejs`
+
+Dans `server.js`, remplacez le `res.json(messages)` par :
+
+```js
+res.render('index', { messages });
+```
+
+Puis ouvrez `views/index.ejs`. Un gabarit EJS, c'est une page HTML avec des
+trous (voir [les notes de cours](/notes_de_cours/rendu/web_sans_react)) ;
+trois balises servent à les remplir :
+
+- `<% ... %>` exécute du JavaScript sans rien afficher : une boucle, un `if` ;
+- `<%= ... %>` affiche la valeur d'une expression, par exemple `<%= m.author %>` ;
+- `<%- ... %>` insère du HTML tel quel, par exemple le résultat d'un autre
+  gabarit.
+
+Dans le `<ul>`, à l'endroit indiqué, écrivez la boucle :
+
+```html
+<% messages.forEach((m) => { %>
+  <%- include('message', { m }) %>
+<% }) %>
+```
+
+Ligne par ligne : `messages` est le tableau que `res.render` vient de passer
+au gabarit ; la boucle s'exécute **sur le serveur**, une fois par message.
+`include('message', { m })` veut dire : « rends le gabarit
+`views/message.ejs` en lui donnant la variable `m`, et insère ici le HTML
+obtenu ». Allez lire `views/message.ejs` : il affiche l'auteur et le texte
+d'un seul message, celui qu'on lui passe sous le nom `m`.
+
+**Vérifier.** La page affiche les trois messages. `Ctrl+U` : tout le contenu
+est dans le HTML. Onglet Réseau : le document, la feuille de style, et
+**aucun JavaScript**.
+
+## Jalon ② : le formulaire, sans JavaScript
+
+- **Fichiers** : `views/index.ejs` et `server.js` (route `POST /messages`)
+
+Dans le gabarit, à l'endroit indiqué, un formulaire HTML tout ce qu'il y a
+de plus classique :
+
+```html
+<form method="post" action="/messages">
+  <input name="author" placeholder="Votre nom" required />
+  <input name="text" placeholder="Votre message" required />
+  <button>Signer</button>
+</form>
+```
+
+Dans la route `POST /messages`, ajoutez le message au tableau
+(`req.body.author`, `req.body.text`, et `nextId++` pour l'identifiant), puis
+terminez par :
+
+```js
+res.redirect('/');
+```
+
+**Vérifier.** Signer le livre fonctionne. Depuis l'onglet développeur (F12)
+onglet Réseau : un `POST` qui répond `302`, puis un `GET` de la page. Ce détour
+s'appelle **POST-redirect-GET** : grâce à lui, recharger la page après l'envoi
+ne renvoie pas le formulaire (sans la redirection, chaque rechargement referait
+le `POST` et signerait le livre une fois de plus). L'interactivité du web a
+fonctionné exactement comme ça pendant vingt ans.
+
+## Jalon ③ : htmx
+
+- **Fichiers** : `views/index.ejs`, `views/message.ejs` et `server.js`
+  (route `DELETE /messages/:id`)
+
+On veut maintenant un bouton Supprimer sur chaque message, **sans recharger
+la page**, et sans écrire de JavaScript nous-mêmes. C'est le travail de
+[htmx](https://htmx.org/) : une petite bibliothèque qu'on charge avec une
+balise `<script>`, et qui lit ensuite des attributs `hx-` posés directement
+dans le HTML. Le principe, toujours le même :
+
+> Un attribut `hx-` déclenche une requête HTTP, le serveur répond un
+> **morceau de HTML**, et htmx remplace un élément de la page par ce
+> morceau. Pas de JSON, pas de `fetch` à écrire.
+
+### Charger htmx
+
+Dans le `<head>` de `views/index.ejs`, à l'endroit indiqué :
+
+```html
+<script src="/htmx.min.js"></script>
+```
+
+Le fichier est déjà dans `public/`. C'est toute l'installation : pas de
+`npm install`, pas de build.
+
+### Le bouton
+
+Dans `views/message.ejs`, ajoutez le bouton à l'endroit indiqué :
+
+```html
+<button hx-delete="/messages/<%= m.id %>" hx-target="closest li" hx-swap="outerHTML">
+  Supprimer
+</button>
+```
+
+Les trois attributs répondent chacun à une question :
+
+- `hx-delete="/messages/<%= m.id %>"` : **quelle requête ?** Au clic, htmx
+  envoie un `DELETE` à cette adresse. La balise EJS `<%= m.id %>` y insère
+  l'identifiant du message, donc chaque bouton vise le sien : le HTML final
+  contient `hx-delete="/messages/2"`, `hx-delete="/messages/3"`, etc.
+  (vérifiez-le avec le code source de la page).
+- `hx-target="closest li"` : **quel élément de la page mettre à jour ?** Le
+  `<li>` le plus proche du bouton en remontant, c'est-à-dire celui du
+  message. Sans cet attribut, htmx remplacerait le bouton lui-même.
+- `hx-swap="outerHTML"` : **comment le mettre à jour ?** En remplaçant
+  l'élément **au complet** par la réponse du serveur (par défaut, htmx ne
+  remplacerait que son contenu, et le `<li>` vide resterait).
+
+### La route
+
+Dans `server.js`, complétez `DELETE /messages/:id` : retirer le message du
+tableau (attention, `req.params.id` est une chaîne, les identifiants du
+tableau sont des nombres), puis répondre :
+
+```js
+res.status(200).send('');
+```
+
+Comme la réponse est **vide**, le `<li>` est remplacé par rien : il disparaît.
+Supprimer un message, c'est remplacer son HTML par du vide.
+
+**Vérifier.** Cliquer sur Supprimer fait disparaître le message **sans
+recharger la page**. Onglet Réseau : une requête `DELETE` part au clic, et
+sa réponse n'est **pas du JSON**, c'est du HTML (vide, ici). Personne n'a
+écrit de `fetch`, ni de `useState` : le serveur reste le seul responsable du
+HTML.
+
+## En panne ?
+
+- `Error: Failed to lookup view` : le nom passé à `res.render` ne correspond
+  pas à un fichier de `views/` (sans l'extension `.ejs`).
+- La réponse est encore `501 À faire` : la route touchée n'est pas complétée,
+  ou le serveur n'a pas redémarré (vérifiez le terminal, `--watch` relance à
+  chaque sauvegarde).
+- `Cannot POST /messages` : le `action` ou le `method` du formulaire ne
+  correspond pas à la route.
+- Le bouton Supprimer ne fait rien : htmx n'est pas chargé (la balise
+  `<script>` du jalon ③), ou un attribut `hx-` est mal orthographié.
+- `EADDRINUSE` au démarrage : un autre programme occupe le port 8080.
