@@ -144,8 +144,99 @@ avec `onclick` : ces attributs sont **déclaratifs** (ils décrivent quoi
 faire, sans contenir de code), donc le problème d'injection de code vu
 plus haut ne se pose pas de la même façon.
 
-Cette approche connaît un vrai regain : pour un site surtout fait de
-formulaires et de listes, comme un back-office (l'interface
+### Les trois questions
+
+Tout attribut `hx-` répond à l'une de trois questions, et il faut les trois
+pour qu'il se passe quelque chose.
+
+**Quelle requête ?** `hx-get`, `hx-post`, `hx-put`, `hx-delete` : le verbe
+HTTP et l'adresse. C'est ce qui déclenche l'envoi, au clic pour un bouton,
+à la soumission pour un formulaire.
+
+**Quel élément mettre à jour ?** `hx-target`, un sélecteur CSS. En plus des
+sélecteurs habituels (`#messages`, `.liste`), htmx en ajoute deux qui se
+lisent à partir de l'élément déclencheur : `closest li` (le `<li>` le plus
+proche en remontant) et `next p` (le paragraphe suivant). Sans `hx-target`,
+la cible est l'élément déclencheur lui-même.
+
+**Comment le mettre à jour ?** `hx-swap` :
+
+| Valeur | Effet |
+|---|---|
+| `innerHTML` (défaut) | remplace le **contenu** de la cible |
+| `outerHTML` | remplace la cible **au complet**, balise comprise |
+| `beforeend` | ajoute à la **fin** du contenu de la cible |
+| `afterbegin` | ajoute au **début** du contenu de la cible |
+| `delete` | supprime la cible, quelle que soit la réponse |
+
+Le choix n'est pas cosmétique. Supprimer une ligne d'une liste demande
+`outerHTML` sur `closest li` (avec `innerHTML`, le `<li>` resterait, vide) ;
+ajouter une ligne demande `beforeend` sur la liste (avec `innerHTML`, le
+nouveau message remplacerait tous les autres).
+
+### Le serveur renvoie des fragments
+
+C'est le vrai changement de point de vue. Une API JSON répond des
+**données**, et c'est le client qui décide de leur apparence :
+
+```json
+{ "id": 42, "author": "Alice", "text": "Bravo !" }
+```
+
+Un serveur htmx répond le **HTML fini**, produit par le même moteur de
+gabarits que le reste du site :
+
+```js
+res.render('message', { m }); // renvoie le <li> au complet
+```
+
+Trois conséquences :
+
+- **Le rendu vit à un seul endroit.** Le gabarit `message.ejs` sert au
+  chargement initial de la page **et** aux mises à jour. Pas de logique
+  d'affichage dupliquée entre le serveur et le client.
+- **Une réponse vide est une réponse valable.** Pour supprimer, le serveur
+  répond un corps vide : la cible est remplacée par rien, donc elle
+  disparaît.
+- **Le fragment arrive complet.** Le `<li>` renvoyé contient déjà ses
+  propres attributs `hx-`, donc son bouton Supprimer fonctionne aussitôt
+  inséré, sans rien rebrancher.
+
+### Servir les deux clients : `HX-Request`
+
+htmx ajoute l'en-tête `HX-Request: true` à toutes ses requêtes. Une même
+route peut donc répondre une page entière au navigateur et un fragment à
+htmx :
+
+```js
+app.post('/messages', (req, res) => {
+  const m = ajouterMessage(req.body);
+  if (req.get('HX-Request')) {
+    res.render('message', { m }); // le fragment, pour htmx
+  } else {
+    res.redirect('/'); // POST-redirect-GET, pour le navigateur
+  }
+});
+```
+
+Cela permet de garder le `method` et le `action` du formulaire HTML et
+d'ajouter les attributs `hx-` **par-dessus** : sans JavaScript, la page
+fonctionne encore par rechargement complet. C'est l'amélioration
+progressive vue plus haut, appliquée à htmx.
+
+### Les limites
+
+htmx ne supprime pas le problème de l'état, il le déplace vers le serveur.
+Tant que chaque interaction se résume à « remplacer ce morceau de page par
+celui-là », c'est net. Dès qu'un affichage dépend d'un état qui vit dans le
+navigateur (une sélection en cours, un brouillon non envoyé, un compteur qui
+avance sans le serveur), il faut un aller-retour réseau pour rafraîchir un
+détail, ou revenir au JavaScript. Et chaque mise à jour coûte une requête :
+pour le salon d'attente de Quiz M9, où la liste des joueurs change chaque
+seconde, ce serait une requête par seconde et par joueur.
+
+Cette approche connaît malgré tout un vrai regain : pour un site surtout
+fait de formulaires et de listes, comme un back-office (l'interface
 d'administration d'un site, réservée aux gestionnaires : l'espace
 animateur de Quiz M9 en est un), elle donne des pages rapides avec très
 peu de JavaScript.
