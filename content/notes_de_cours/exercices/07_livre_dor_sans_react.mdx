@@ -166,6 +166,91 @@ sa réponse n'est **pas du JSON**, c'est du HTML (vide, ici). Personne n'a
 écrit de `fetch`, ni de `useState` : le serveur reste le seul responsable du
 HTML.
 
+## Jalon ④ : signer sans recharger
+
+- **Fichiers** : `views/index.ejs` et `server.js` (route `POST /messages`)
+
+Le formulaire du jalon ② recharge la page à chaque signature. Confions-le
+aussi à htmx : ajoutez trois attributs au `<form>`, **sans retirer**
+`method` ni `action` :
+
+```html
+<form method="post" action="/messages"
+      hx-post="/messages" hx-target="#messages" hx-swap="beforeend"
+      hx-on::after-request="this.reset()">
+```
+
+- `hx-post="/messages"` : au clic sur Signer, c'est htmx qui envoie le
+  `POST` (mêmes champs, même adresse), au lieu de laisser le navigateur
+  soumettre le formulaire.
+- `hx-target="#messages"` et `hx-swap="beforeend"` : la réponse du serveur
+  est insérée à la fin du `<ul id="messages">`, comme dernier élément.
+- `hx-on::after-request="this.reset()"` : quand la requête est terminée,
+  vider les champs du formulaire.
+
+Pourquoi garder `method` et `action` ? Si htmx ne charge pas, le formulaire
+classique du jalon ② fonctionne encore : c'est l'**amélioration
+progressive** vue dans les notes de cours.
+
+Côté serveur, la route ne peut plus se contenter de `res.redirect('/')` :
+htmx attend en réponse un **fragment de HTML** (le nouveau message) à
+insérer dans la liste. L'en-tête `HX-Request`, que htmx ajoute à toutes ses
+requêtes, permet de servir les deux clients. Mettez d'abord le nouveau
+message dans une variable `m`, puis :
+
+```js
+if (req.get('HX-Request')) {
+  res.render('message', { m });
+} else {
+  res.redirect('/');
+}
+```
+
+**Vérifier.** Signer ajoute le message **sans recharger la page**, et les
+champs se vident. Onglet Réseau : le `POST` répond `200` avec un fragment
+de HTML (cliquez sur la requête pour le voir), plus de `302`. Et le bouton
+Supprimer du nouveau message fonctionne déjà : le fragment renvoyé, c'est
+`message.ejs` au complet, bouton compris.
+
+## Jalon ⑤ : l'attaque XSS
+
+Le livre d'or accepte n'importe quel texte. N'importe qui peut le signer.
+Un test s'impose.
+
+**1. Tenter l'injection.** Signez avec le message `<b>Bravo !</b>`. La page
+affiche le texte tel quel, chevrons compris. Rechargez et faites `Ctrl+U` :
+EJS a envoyé `&lt;b&gt;Bravo !&lt;/b&gt;`. La balise `<%= %>` **échappe** le
+HTML : elle remplace `<` par `&lt;`, `>` par `&gt;`, et le navigateur affiche
+donc des caractères au lieu d'interpréter une balise. Le message reste une
+**donnée**, il ne devient jamais du **code**.
+
+**2. Désactiver la protection.** Dans `views/message.ejs`, remplacez
+`<%= m.text %>` par `<%- m.text %>` (le tiret au lieu du égal : « insère le
+HTML tel quel »). Rechargez : le message précédent s'affiche maintenant en
+**gras**. Le texte de l'utilisateur est devenu du HTML.
+
+**3. Attaquer.** Signez avec :
+
+```html
+<img src=x onerror="alert(document.cookie)">
+```
+
+L'image n'existe pas, donc le navigateur déclenche `onerror`, donc le code
+s'exécute. Ici c'est une alerte inoffensive ; un vrai attaquant y mettrait
+un `fetch` vers son propre serveur, avec le cookie de session de la victime
+en paramètre. Notez bien ce qui rend l'attaque grave : le message est
+**stocké** côté serveur, donc le code s'exécute chez **tous** les visiteurs
+suivants, sans qu'ils aient rien cliqué. C'est une XSS **persistante**.
+
+**4. Réparer.** Remettez `<%= m.text %>`, rechargez : l'attaque redevient du
+texte affiché. Supprimez le message piégé.
+
+La règle à retenir : **une donnée qui vient de l'utilisateur s'affiche
+toujours avec `<%= %>`**. On ne réserve `<%- %>` qu'au HTML qu'on a produit
+soi-même, comme le `include('message', ...)` du jalon ①. React applique la
+même règle par défaut, ce qui explique le nom de sa porte de sortie :
+`dangerouslySetInnerHTML`.
+
 ## En panne ?
 
 - `Error: Failed to lookup view` : le nom passé à `res.render` ne correspond
@@ -178,3 +263,9 @@ HTML.
 - Le bouton Supprimer ne fait rien : htmx n'est pas chargé (la balise
   `<script>` du jalon ③), ou un attribut `hx-` est mal orthographié.
 - `EADDRINUSE` au démarrage : un autre programme occupe le port 8080.
+- Jalon ④, la page se recharge quand même : htmx n'a pas intercepté l'envoi.
+  Vérifiez `hx-post` sur le `<form>` (pas sur le `<button>`).
+- Jalon ④, la page entière apparaît dans la liste : la route répond encore
+  `res.redirect('/')` pour tout le monde, le test sur `HX-Request` manque.
+- Jalon ④, le message s'ajoute deux fois : `hx-swap` vaut `beforeend`, et non
+  `outerHTML` ou `innerHTML`.
