@@ -1,0 +1,108 @@
+---
+sidebar_position: 5
+sidebar_label: "Démo pas à pas : l'action"
+description: "La démonstration de la semaine 3, étape par étape : l'action qui crée un questionnaire"
+---
+
+# Démo pas à pas : l'action qui crée un questionnaire
+
+La démonstration donnée en classe, reprise étape par étape pour la refaire
+seul. Les notes à garder ouvertes : [L'action de React
+Router](/notes_de_cours/rendu/action_react_router).
+
+## Point de départ
+
+La branche `sem-03` de Quiz M9, `npm install` fait (de nouvelles
+dépendances sont arrivées), `npm run dev` lancé, `npm run verifier` à
+**46 sur 54**. La page `/quizzes` a déjà son formulaire « Nouveau
+questionnaire » ; il ne manque que l'`action`.
+
+## Étape 1 : constater le problème
+
+Sur `http://localhost:5173/quizzes`, tapez un titre et cliquez sur Créer.
+Page d'erreur : **Oups. Method Not Allowed**. C'est un 405 : le routeur a
+trouvé la route `/quizzes`, mais elle n'accepte pas le POST, parce qu'elle
+n'a pas d'`action`. Le formulaire est bien arrivé ; personne ne le traite.
+
+
+## Étape 2 : écrire l'action
+
+Dans `client/app/routes/quizzes.jsx`, sous le `loader` :
+
+```jsx
+export async function action({ request }) {
+  const formData = await request.formData();
+
+  const response = await fetch(`${API_URL}/api/quizzes`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title: formData.get('title') }),
+  });
+  const body = await response.json();
+
+  if (!response.ok) {
+    return data({ error: body.error }, { status: response.status });
+  }
+  return redirect(`/quizzes/${body.id}/edit`);
+}
+```
+
+Ligne par ligne :
+
+- `export`, parce que c'est React Router qui l'appelle, pas nous.
+- `request.formData()` : les champs, par leur `name`. Le formulaire n'a
+  qu'un champ, `title`.
+- `${API_URL}/api/quizzes` : adresse complète, l'`action` tourne sur le
+  serveur du client, comme le `loader`.
+- `data(…, { status })` : l'erreur retourne à la page, avec le code de
+  l'API.
+- `redirect(…)` : POST-redirect-GET, vers l'éditeur du nouveau questionnaire.
+
+Ajustez l'import : `data` et `redirect` viennent de `react-router`.
+
+## Étape 3 : créer
+
+Rechargez, tapez un titre, Créer. La page change : `/quizzes/4/edit` (votre
+numéro peut varier). Elle répond pour l'instant « À faire : le loader de
+l'éditeur » : c'est le jalon ② de l'exercice. Revenez sur `/quizzes` : le
+questionnaire est dans la liste, avec 0 question.
+
+## Étape 4 : regarder passer la requête
+
+Onglet Réseau, recommencez. Un `POST` sur `quizzes.data`, réponse `202`
+avec une instruction de redirection, puis la navigation. Aucune ligne de
+`fetch` dans le composant ; `<Form>` a tout fait.
+
+Désactivez JavaScript (F12, Ctrl+Shift+P, « Disable JavaScript »),
+rechargez, créez encore : cette fois un vrai `POST /quizzes` et une réponse
+`302`. Même `action`, même résultat. Réactivez JavaScript.
+
+## Étape 5 : l'erreur
+
+Tapez trois espaces comme titre. `required` laisse passer (le champ n'est
+pas vide), l'API refuse : 400, « Le titre est obligatoire. » Mais la page
+ne dit rien. Dans le composant :
+
+```jsx
+const actionData = useActionData();
+…
+{actionData?.error && <p className="error">{actionData.error}</p>}
+```
+
+`useActionData` vient aussi de `react-router`. Recommencez : le message
+s'affiche sous le champ, et l'onglet Réseau montre un `400`.
+
+## Étape 6 : le harnais
+
+`npm run verifier` : **49 sur 54**. Les trois premières vérifications de la
+partie 3 passent ; le reste, c'est l'éditeur.
+
+## En panne ?
+
+- **Method Not Allowed** (405) : la fonction n'est pas **exportée**, ou
+  elle ne porte pas exactement le nom `action`.
+- `data is not defined` ou `redirect is not defined` : l'import.
+- `fetch failed` : Express ne tourne pas, ou l'adresse est relative.
+- La liste ne se met pas à jour après la création : normal ici, on a
+  redirigé. Sur une `action` sans `redirect`, la revalidation rejoue le
+  `loader`.

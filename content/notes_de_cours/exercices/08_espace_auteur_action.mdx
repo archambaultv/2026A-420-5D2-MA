@@ -1,0 +1,129 @@
+---
+sidebar_position: 8
+sidebar_label: 7. Écrire un questionnaire dans le navigateur
+description: "Quiz M9, semaine 3 : l'espace auteur avec les action de React Router"
+---
+
+# Exercice 7 : écrire un questionnaire dans le navigateur
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+Depuis la semaine 2, les questionnaires viennent de `seed.sql`. Cette
+semaine, l'auteur les écrit dans le navigateur : un formulaire pour créer un
+questionnaire, un autre pour lui ajouter des questions. Côté serveur, tout
+est fourni (les routes de l'API et les écritures du `repository/`) ; votre
+travail est dans le client, avec les `action` de React Router. Les notes de
+cours à garder ouvertes : [L'action de React
+Router](/notes_de_cours/rendu/action_react_router) et la [démo pas à
+pas](/notes_de_cours/rendu/demo_action_quizzes).
+
+## Étape 0 : partir du bon pied
+
+La branche `main` du dépôt a avancé. Récupérez-la, puis créez votre branche
+de la semaine :
+
+```bash
+git checkout main
+git pull
+git checkout -b sem-03
+npm install          # de nouvelles dépendances sont arrivées
+npm run dev
+```
+
+Dans un autre terminal, `npm run verifier` : **46 sur 54**. Les huit
+vérifications de la **Partie 3** sont le travail du jour.
+
+Regardez ce qui est nouveau : `server/src/server.js` a trois routes de plus
+(`POST /api/quizzes`, `POST /api/quizzes/:id/questions`, `DELETE …`), et
+`repository/quizzes.js` les écritures correspondantes, dans une
+transaction. Lisez la fonction `validateQuestion` de `server.js` : c'est
+elle qui décide ce qu'est une question valide.
+
+## Jalon ① : créer un questionnaire
+
+- **Fichier** : `client/app/routes/quizzes.jsx`
+
+Le formulaire « Nouveau questionnaire » est déjà dans la page ; il ne
+manque que l'`action`. Le `TODO` sur place décrit les quatre gestes : lire
+`formData`, appeler `POST /api/quizzes`, retourner l'erreur avec `data(…)`
+si l'API refuse, sinon `redirect(…)` vers l'éditeur. C'est exactement la
+démonstration.
+
+**Vérifier.** Créer un questionnaire vous emmène sur `/quizzes/N/edit` (qui
+répond « À faire » pour l'instant : c'est le jalon ②). De retour sur
+`/quizzes`, il est dans la liste, avec 0 question. `npm run verifier` :
+**48 sur 54**.
+
+## Jalon ② : l'éditeur
+
+- **Fichier** : `client/app/routes/quiz-edit.jsx`
+
+Deux fonctions à écrire, les deux `TODO` sur place.
+
+**Le `loader`** : le même que celui de `quiz-details.jsx`, à la lettre.
+
+**L'`action`** : le formulaire envoie `text`, `durationSeconds`, `choice1`
+à `choice4` et `correct` (le numéro du choix coché). Construire le tableau
+des choix en ignorant les champs vides (le code est dans le `TODO`),
+appeler `POST /api/quizzes/:id/questions`, retourner l'erreur si l'API
+refuse, sinon retourner `{ added: true }`. **Pas de redirection** : React
+Router rejoue le `loader`, et la question apparaît dans la page.
+
+**Vérifier.** Ajouter une question la fait apparaître au-dessus du
+formulaire, sans rechargement, et le formulaire se vide. Onglet Réseau : un
+`POST` sur `edit.data`, puis la page mise à jour. `npm run verifier` :
+**51 sur 54**.
+
+## Jalon ③ : afficher les erreurs
+
+- **Fichiers** : `quizzes.jsx` et `quiz-edit.jsx`
+
+L'API refuse un titre vide, une question sans bonne réponse, une durée de
+200 secondes. Vos `action` retournent déjà `data({ error }, { status })` ;
+il reste à l'afficher : `useActionData()` dans le composant, et un
+`<p className="error">` sous le formulaire.
+
+**Vérifier.** Trois espaces comme titre : « Le titre est obligatoire. »
+sous le champ. Une question sans bouton radio coché : « Une question a
+exactement une bonne réponse. » `npm run verifier` : **53 sur 54**.
+
+## Jalon ④ : retirer une question
+
+- **Fichier** : `quiz-edit.jsx`
+
+Sur chaque question de l'éditeur, un petit `<Form method="post">` avec
+deux champs cachés, `intent=delete` et `questionId`, et un bouton Retirer.
+Dans l'`action`, si `intent` vaut `delete`, appeler `DELETE
+/api/quizzes/:id/questions/:questionId` au lieu d'ajouter. C'est le
+pendant du bouton Supprimer du livre d'or : là, htmx renvoyait un `<li>`
+vide ; ici, la revalidation relit la liste.
+
+**Vérifier.** La question disparaît sans rechargement. `npm run verifier` :
+**54 sur 54**.
+
+## Vérifier votre travail
+
+Écrivez un questionnaire de trois questions dans le navigateur, puis jouez-le à
+deux navigateurs.
+
+
+## En panne ?
+
+- *did not provide an `action`* : la fonction n'est pas exportée, ou pas
+  dans le bon fichier.
+- `data is not defined`, `redirect is not defined`, `useActionData is not
+  defined` : l'import depuis `react-router`.
+- `fetch failed` : Express ne tourne pas, ou l'adresse est relative
+  (`/api/…` au lieu de `${API_URL}/api/…`).
+- Le formulaire de question renvoie toujours « exactement une bonne réponse » :
+  `isCorrect` est-il comparé à `String(n)` ? `formData.get('correct')` est
+  une chaîne, `"2"`, pas un nombre.
+- La question n'apparaît pas après l'ajout : l'`action` a-t-elle retourné
+  quelque chose (pas `undefined`) ? Regardez le terminal du client.
+- `npm run verifier` échoue sur « redirection (302) » alors que ça marche
+  dans le navigateur : l'`action` retourne-t-elle bien `redirect(…)` (avec
+  `return`) ?

@@ -1,0 +1,217 @@
+---
+sidebar_position: 4
+sidebar_label: L'action de React Router
+description: "Écrire depuis une page rendue côté serveur : Form, action, redirect, useActionData, revalidation"
+---
+
+# L'action de React Router
+
+## Les exports d'un module de route
+
+Un module de route exporte des fonctions **dont le nom fait le
+branchement** : on ne les appelle jamais soi-même, c'est React Router qui
+les appelle au bon moment.
+
+| Export | Quand React Router l'appelle | Où il s'exécute |
+|---|---|---|
+| `loader` | avant d'afficher la page (`GET`) | serveur du client (5173) |
+| `action` | à l'envoi d'un formulaire (`POST`) | serveur du client (5173) |
+| `default` (le composant) | pour produire le HTML, puis à chaque rendu | 5173, puis le navigateur |
+
+D'où l'erreur si l'`action` manque ou porte un autre nom : la route existe,
+mais elle n'accepte pas le `POST`. React Router répond **405 Method Not
+Allowed**.
+
+## Le livre d'or, en React Router
+
+Au livre d'or, un formulaire classique suffisait :
+
+```html
+<form method="post" action="/messages">
+  <input name="author" required />
+  <button>Signer</button>
+</form>
+```
+
+Le navigateur envoie un `POST /messages`, Express le reçoit, écrit, puis
+`res.redirect('/')`. En React Router, c'est la même idée, avec deux
+différences : le formulaire s'écrit `<Form>` (majuscule, importé de
+`react-router`), et la route qui le reçoit n'est pas une route Express, c'est
+l'`action` du module de la page.
+
+| Livre d'or (Express + EJS) | Quiz M9 (React Router) |
+|---|---|
+| `<form method="post" action="/messages">` | `<Form method="post">` (l'URL de la page, par défaut) |
+| `app.post('/messages', (req, res) => …)` | `export async function action({ request }) { … }` |
+| `req.body.author` | `(await request.formData()).get('author')` |
+| `res.redirect('/')` | `return redirect('/')` |
+| `res.render('index', { error })` | `return data({ error }, { status: 400 })` puis `useActionData()` |
+
+## Le cycle d'un formulaire
+
+1. L'auteur clique sur le bouton. `<Form>` envoie les champs à l'`action`
+   de la route courante.
+2. L'`action` s'exécute **sur le serveur**. Elle lit les champs, appelle
+   l'API, et retourne quelque chose.
+3. Si elle retourne `redirect(...)`, React Router navigue vers cette page.
+4. Sinon, React Router **rejoue les `loader`** des routes affichées, puis
+   rend la page avec les données fraîches. C'est la **revalidation** : la
+   liste se met à jour toute seule, parce que sa source (le `loader`) a été
+   relue. Au livre d'or, il fallait renvoyer un fragment htmx ; ici, rien à
+   écrire.
+
+## Créer un questionnaire
+
+```jsx title="client/app/routes/quizzes.jsx (extrait)"
+import { Form, data, redirect, useActionData, useLoaderData } from 'react-router';
+import { API_URL } from '../api-url.js';
+
+export async function action({ request }) {
+  // 1. Les champs du formulaire, par leur attribut name.
+  const formData = await request.formData();
+
+  // 2. L'écriture passe par l'API : l'action ne parle pas à la base.
+  const response = await fetch(`${API_URL}/api/quizzes`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title: formData.get('title') }),
+  });
+  const body = await response.json();
+
+  // 3. Une erreur attendue retourne à la page, avec le code de l'API.
+  if (!response.ok) {
+    return data({ error: body.error }, { status: response.status });
+  }
+
+  // 4. Créé : POST-redirect-GET, vers l'éditeur du nouveau questionnaire.
+  return redirect(`/quizzes/${body.id}/edit`);
+}
+
+export default function Quizzes() {
+  const quizzes = useLoaderData();
+  const actionData = useActionData();   // ce que l'action a retourné, ou undefined
+
+  return (
+    <Form method="post">
+      <input name="title" required />
+      {actionData?.error && <p className="error">{actionData.error}</p>}
+      <button>Créer</button>
+    </Form>
+  );
+}
+```
+
+Trois choses à retenir :
+
+- **`request.formData()`** rend un `FormData` : `get('title')` renvoie la
+  valeur du champ dont l'attribut `name` vaut `title`. Les noms des champs
+  sont le contrat entre le formulaire et l'`action`.
+- **`redirect()`** est le POST-redirect-GET du livre d'or : après une
+  création, on emmène l'utilisateur ailleurs plutôt que de laisser un `POST`
+  dans l'historique.
+- **`data(valeur, { status })`** retourne une valeur à la page **avec un
+  code HTTP**. Le composant la lit avec `useActionData()`. Sans le `status`,
+  la page répondrait 200 à un formulaire refusé ; un 400 dit la vérité.
+
+## `API_URL`
+
+Comme le `loader`, l'`action` tourne côté serveur : le relais de Vite
+n'existe pas, il faut l'adresse complète de l'API. Elle vient de
+`client/app/api-url.js` :
+
+```js
+export const API_URL = process.env.API_URL ?? 'http://localhost:3000';
+```
+
+Sur votre poste, la valeur par défaut. Dans un conteneur, la variable
+d'environnement `API_URL` (voir [Docker Compose](/notes_de_cours/docker/compose)).
+
+## Plusieurs formulaires, une seule action
+
+Une route n'a qu'une `action`. Quand une page porte plusieurs formulaires
+(ajouter une question, en retirer une), un champ caché dit lequel a été
+envoyé :
+
+```jsx
+<Form method="post">
+  <input type="hidden" name="intent" value="delete" />
+  <input type="hidden" name="questionId" value={question.id} />
+  <button>Retirer</button>
+</Form>
+```
+
+```js
+export async function action({ request, params }) {
+  const formData = await request.formData();
+  if (formData.get('intent') === 'delete') {
+    // DELETE /api/quizzes/:id/questions/:questionId
+  }
+  // sinon : ajouter
+}
+```
+
+## Où va la validation ?
+
+Le formulaire porte `required`, `min`, `max`, `type="number"` : le
+navigateur refuse d'envoyer un titre vide ou une durée de 200 secondes.
+C'est utile, et **ce n'est pas une protection** : n'importe qui peut parler
+à l'API sans passer par le formulaire.
+
+```bash
+curl -X POST -H 'content-type: application/json' -d '{"title": ""}' \
+  http://localhost:3000/api/quizzes
+# → 400 {"error":"Le titre est obligatoire."}
+```
+
+Le navigateur est d'ailleurs plus permissif qu'on ne croit : `required` ne
+teste que « non vide ». Un titre de trois espaces passe le formulaire, et
+c'est Express qui le refuse, après un `title.trim()`.
+
+La validation qui compte est celle du **serveur Express**, dans la route,
+avant le `repository`. L'`action`, entre les deux, ne valide rien : elle
+transmet, et rapporte la réponse. Trois étages, trois rôles :
+
+```
+navigateur          required, min, max      confort : on évite un aller-retour
+   │
+action (5173)       lit le formulaire       transmet à l'API, rapporte l'erreur
+   │
+route Express (3000) valide vraiment        400 { error } si refus, sinon repository
+```
+
+C'est le même partage des rôles que celui décrit dans
+[L'architecture](/notes_de_cours/quiz_m9/architecture), section « Le chemin
+d'une requête » : la route valide, le repository ne fait que du SQL.
+
+### Pourquoi pas valider dans l'`action` ?
+
+Elle tourne sur un serveur, elle aussi. La question est légitime, et la
+réponse tient en une phrase : **l'API doit se défendre seule**. L'`action`
+n'est qu'un de ses clients ; `curl` en est un autre, et demain une
+application mobile en sera un troisième. Une règle écrite dans l'`action`
+ne protège que les requêtes qui passent par le formulaire.
+
+Écrire la règle aux deux endroits ne règle rien non plus : deux copies
+d'une règle finissent toujours par diverger, et on ne sait plus laquelle
+fait foi. Chaque règle métier vit à **un seul endroit**. Ouvrez
+`validateQuestion` dans `server/src/server.js` : « une question a
+exactement une bonne réponse » y est écrit une fois, et nulle part
+ailleurs.
+
+## Les erreurs : retourner ou lever ?
+
+- **Retourner** `data({ error }, { status: 400 })` pour une erreur
+  **attendue**, que l'utilisateur peut corriger : la page reste affichée
+  avec le message.
+- **Lever** `throw new Response('…', { status: 404 })` quand la ressource
+  n'existe pas, ou `throw new Error(…)` pour l'inattendu : React Router
+  affiche l'`ErrorBoundary` de `root.jsx`.
+
+:::tip[Vérifier une action]
+
+Dans l'onglet Réseau, après l'envoi : un `POST` (sur `….data`, ou sur la
+page elle-même sans JavaScript), sa réponse, puis les données des `loader`
+rejoués. Si la page ne change pas, regardez d'abord le terminal du client :
+une `action` qui lève une erreur y laisse sa trace.
+
+:::

@@ -16,7 +16,7 @@ monte.
 dans sa version courante** : elle est mise à jour chaque fois que
 l'architecture change. Gardez-la ouverte pendant que vous travaillez dedans.
 
-*Dernière mise à jour : semaine 2.*
+*Dernière mise à jour : semaine 3.*
 
 ## Deux processus
 
@@ -35,12 +35,15 @@ l'architecture change. Gardez-la ouverte pendant que vous travaillez dedans.
 ```
 
 - Le **serveur** (`server/`) ne parle que JSON : c'est l'API. Toutes les
-  données vivent chez lui, dans `quizm9.db`.
+  données vivent chez lui, dans `quizm9.db` (ou au chemin donné par la
+  variable d'environnement `DB_PATH`).
 - Le **client** (`client/`) rend les pages. Quand une page a besoin de
   données, elles viennent **toujours** de l'API, jamais d'un accès direct à
   la base.
 - En développement, les appels `fetch('/api/…')` du navigateur sont relayés
-  par Vite au port 3000 (voir `client/vite.config.js`).
+  par Vite au port 3000 (voir `client/vite.config.js`). Les `loader` et
+  `action`, eux, tournent sur le serveur du client et appellent l'API par
+  son adresse complète, `API_URL` (`client/app/api-url.js`).
 
 Le client tourne en **React Router mode framework**. C'est toujours du React
 (composants, props, `useState`, `useEffect`), mais chaque page a une
@@ -63,7 +66,7 @@ contient un fichier par page.
 | Catalogue public | `/catalogue` | `catalogue.jsx` |
 | Liste d'animateur | `/quizzes` | `quizzes.jsx` |
 | Un questionnaire | `/quizzes/:id` | `quiz-details.jsx` |
-| Éditeur (maquette) | `/quizzes/:id/edit` | `quiz-edit.jsx` |
+| Éditeur | `/quizzes/:id/edit` | `quiz-edit.jsx` |
 | Salon d'attente | `/salon/:code` | `lobby.jsx` |
 | Salle de jeu | `/jeu/:code` | `game.jsx` |
 
@@ -71,15 +74,18 @@ Le scénario d'une partie : l'animateur choisit un questionnaire dans le
 **catalogue** → tout le monde se retrouve au **salon** avec le code → la
 partie se joue dans la **salle de jeu**.
 
-L'éditeur est une maquette : créer et modifier un questionnaire depuis le
-navigateur, c'est la semaine 3.
+L'espace auteur (liste, questionnaire, éditeur) est rendu **côté serveur** :
+ses pages lisent par un `loader` et écrivent par une `action` (semaine 3).
+Le catalogue reste rendu côté client, comme témoin.
 
 ## Se repérer dans le dépôt
 
 Voici la structure du dépôt, avec les fichiers les plus importants.
 
 ```
+compose.yml              Quiz M9 d'une seule commande : docker compose up
 server/
+  Dockerfile             l'image de l'API
   src/server.js          les routes de l'API
   src/game.js            le moteur de jeu (états, échéances, pointage)
   src/scoring.js         calculateScore, la fonction pure de pointage
@@ -89,9 +95,12 @@ server/
   data/quizm9.db         votre base locale (non versionnée)
   verifier/              le harnais npm run verifier qui sert de tests unitaires
 client/
+  Dockerfile             l'image du client, en deux étapes
+  server.js              le serveur de production du client (relais /api + pages)
   app/routes.js          une ligne par page
   app/routes/            les sept pages
-  app/api.js             les appels fetch vers l'API
+  app/api.js             les appels fetch vers l'API, depuis le navigateur
+  app/api-url.js         l'adresse de l'API, vue des loader et action
   app/useGame.js         le sondage toutes les secondes
 ```
 
@@ -153,6 +162,28 @@ l'animateur clôt la question en cours :
 4. La route répond l'état public de la partie : les joueurs voient les
    résultats et le classement à jour.
 
+
+Suivons enfin une écriture depuis un formulaire, l'auteur qui crée un
+questionnaire sur `/quizzes` :
+
+1. Le `<Form method="post">` envoie le titre à l'**`action`** de la route,
+   qui s'exécute sur le serveur du client (5173).
+2. L'`action` appelle `POST /api/quizzes` sur Express (3000), à l'adresse
+   `API_URL`.
+3. **La route** valide le titre (400 s'il est vide), puis
+   `repository.createQuiz(title)` fait l'`INSERT`.
+4. L'`action` reçoit l'id et répond `redirect('/quizzes/4/edit')` : le
+   navigateur arrive sur l'éditeur, dont le `loader` relit le questionnaire.
+
+## Avec Docker
+
+`docker compose up --build` démarre les deux processus dans deux
+conteneurs, sur un réseau privé où le client joint l'API par son nom
+(`API_URL=http://api:3000`). La base vit dans le volume `quizm9-data`,
+monté sur `/data` dans le conteneur de l'API (`DB_PATH=/data/quizm9.db`) :
+elle survit à la destruction des conteneurs. En production, le client est
+construit puis servi par `client/server.js`, qui relaie `/api` comme Vite
+le fait en développement.
 
 ## Le temps réel de la partie
 
