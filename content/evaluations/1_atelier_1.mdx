@@ -1,20 +1,444 @@
 ---
 sidebar_position: 1
 sidebar_label: Atelier 1
-description: Énoncé de l'évaluation « Atelier 1 »
+description: Énoncé de l'évaluation « Atelier 1 » (Docker)
 ---
 
-# Atelier 1
+# Atelier 1 : Docker
 
 - **Pondération** : 5 %
-- **Modalité** : individuel
-- **Sujet** : Docker
-- **Énoncé distribué** : semaine 3
-- **Remise** : semaine 3
+- **Modalité** : individuel, en classe, pendant le bloc de 3 h de la semaine 3
+- **Sujet** : Docker, sur le serveur pédagogique
+- **Évaluation** : à votre poste, pendant le bloc, quand vous avez terminé
+  (voir [Montrer que ça marche](#montrer-que-ça-marche))
+- **Documentation** : toute documentation en ligne est permise, y compris
+  les notes de cours
 
-:::info[Détails à venir]
+Cet atelier se fait **en autonomie**, dans l'ordre, un jalon à la fois.
+Chaque jalon dit quoi faire, puis comment **vérifier** que c'est fait. Ne
+passez pas au jalon suivant tant que la vérification ne réussit pas ; en
+cas de panne, la section [En panne ?](#en-panne-) est en bas de page.
+Comptez deux heures. Gardez ouvertes les deux pages de notes : [Docker :
+image, conteneur, volume](/notes_de_cours/docker/conteneurs) et [Docker
+Compose](/notes_de_cours/docker/compose).
 
-L'énoncé complet sera publié ici à la semaine de distribution. D'ici là, le plan
-de cours fait foi.
+## Jalon 0 : se connecter au serveur (15 min)
+
+Chaque personne a **sa** machine : un Linux avec Docker, sans Node. Vous
+avez reçu son adresse (`10.70.42.X`) et votre mot de passe. Le nom
+d'utilisateur est `dev`. Le serveur n'est joignable que depuis les postes
+du laboratoire (réseau filaire).
+
+**Avec VS Code (recommandé)**, vous éditez les fichiers du serveur comme
+s'ils étaient sur votre poste :
+
+1. Dans VS Code, installez l'extension **Remote - SSH** (`Ctrl+Shift+X`,
+   cherchez « Remote - SSH », éditeur Microsoft) si elle n'est pas déjà là.
+2. `F1`, tapez **Remote-SSH: Connect to Host...**, puis entrez
+   `dev@10.70.42.X` (votre adresse). Choisissez **Linux** si on vous
+   demande le type de machine, puis tapez votre mot de passe. Une nouvelle
+   fenêtre s'ouvre ; le coin inférieur gauche affiche `SSH: 10.70.42.X`.
+   La première connexion prend quelques minutes (VS Code s'installe sur le
+   serveur).
+3. **File > Open Folder**, acceptez le dossier proposé (`/home/dev`), OK.
+   Entrez le mot de passe encore si on le demande.
+4. **Terminal > New Terminal** (`` Ctrl+` ``). Ce terminal est **sur le
+   serveur**.
+
+:::warning[Les serveurs pédagogiques sont lents]
+
+La première connexion, `docker run hello-world`, un `docker build` : tout
+ce qui télécharge ou construit peut prendre **quelques minutes** sans rien
+afficher. C'est normal. Attendez que la commande rende la main avant de
+conclure que ça ne marche pas, et ne relancez pas la même commande en
+parallèle.
 
 :::
+
+**Sans VS Code**, dans un terminal Windows (PowerShell ou Windows
+Terminal) : `ssh dev@10.70.42.X`, répondez `yes` à la question sur
+l'empreinte, puis le mot de passe (rien ne s'affiche pendant qu'on le
+tape, c'est normal). Pour éditer un fichier : `nano fichier`, `Ctrl+O`
+pour enregistrer, `Ctrl+X` pour quitter.
+
+**Vérifier**, dans le terminal du serveur :
+
+```bash
+docker --version           # Docker version 2x...
+docker compose version     # Docker Compose version v2...
+docker run --rm hello-world
+node -v                    # « command not found » : c'est normal, et c'est le point
+```
+
+`hello-world` télécharge une image minuscule et l'exécute : le paragraphe
+« Hello from Docker! » s'affiche. Sans lui, rien de ce qui suit ne marchera.
+
+## Jalon 1 : une première image (20 min)
+
+Le projet jouet des notes, tel quel. Sur le serveur :
+
+```bash
+mkdir salut && cd salut
+```
+
+Créez les **trois fichiers** de la section [Un Dockerfile, ligne par
+ligne](/notes_de_cours/docker/conteneurs#un-dockerfile-ligne-par-ligne) :
+`server.js`, `package.json`, `Dockerfile`, et un quatrième,
+`.dockerignore`, avec la ligne `node_modules`. Dans VS Code : clic droit sur
+le dossier `salut` dans l'explorateur, **New File**, collez.
+
+Relisez le `Dockerfile` en entier avant de le construire : chaque ligne y
+est commentée, et la section [Un Dockerfile, ligne par
+ligne](/notes_de_cours/docker/conteneurs#un-dockerfile-ligne-par-ligne)
+explique chaque instruction.
+
+```bash
+docker build -t salut .
+docker run -d --name salut1 -p 8000:8000 salut
+curl localhost:8000
+```
+
+Puis, une commande à la fois, en regardant ce que chacune répond :
+
+```bash
+docker ps                                       # le conteneur salut1 tourne
+docker logs salut1                              # ce que le processus a écrit
+docker exec -it salut1 sh                       # un terminal DANS le conteneur
+  ls                                            #   le code, node_modules
+  node -v                                       #   Node est là, dedans
+  cat /etc/os-release                           #   Alpine Linux
+  exit
+docker run -d --name salut2 -p 8001:8000 salut  # un second conteneur, même image
+curl localhost:8001
+docker images                                   # salut, node, hello-world
+docker rm -f salut1 salut2                      # tout détruire
+docker ps -a                                    # plus rien
+```
+
+**Vérifier.** `curl localhost:8000` répond `Bonjour depuis <douze
+caractères> (Node v24...)`. Les douze caractères sont l'identifiant du
+conteneur, que `docker ps` affiche aussi. `curl localhost:8001` répond un
+**autre** identifiant : deux conteneurs de la même image, deux machines.
+
+## Jalon 2 : l'image du tableau d'affichage (30 min)
+
+L'application de l'atelier : une API JSON en Express, dont les messages
+vivent dans un fichier SQLite. Rien à y modifier. Sur le serveur :
+
+```bash
+cd ~ && mkdir tableau && cd tableau
+```
+
+Créez ces trois fichiers :
+
+```json title="package.json"
+{
+  "name": "tableau",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
+```
+
+```js title="server.js"
+/**
+ * Le tableau d'affichage : une petite API JSON, sans page web.
+ *
+ *   GET    /              qui répond, et combien de messages
+ *   GET    /messages      tous les messages
+ *   POST   /messages      ajouter, corps : { "text": "..." }
+ *   DELETE /messages/:id  retirer
+ */
+import express from 'express';
+import { hostname } from 'node:os';
+import { addMessage, deleteMessage, listMessages } from './db.js';
+
+const app = express();
+app.use(express.json());
+
+app.get('/', (req, res) => {
+  res.json({
+    application: 'tableau',
+    machine: hostname(),
+    node: process.version,
+    messages: listMessages().length,
+  });
+});
+
+app.get('/messages', (req, res) => {
+  res.json(listMessages());
+});
+
+app.post('/messages', (req, res) => {
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (text === '') {
+    return res.status(400).json({ error: 'Le texte est obligatoire.' });
+  }
+  res.status(201).json(addMessage(text));
+});
+
+app.delete('/messages/:id', (req, res) => {
+  if (!deleteMessage(Number(req.params.id))) {
+    return res.status(404).json({ error: 'Message introuvable.' });
+  }
+  res.status(204).end();
+});
+
+// Le port vient de l'environnement, 8080 à défaut.
+const port = process.env.PORT ?? 8080;
+app.listen(port, () => {
+  console.log(`Tableau sur http://localhost:${port}`);
+});
+```
+
+```js title="db.js"
+/**
+ * Les messages du tableau, dans un fichier SQLite. Tout le SQL est ici.
+ *
+ * Le fichier est data/tableau.db par défaut ; la variable d'environnement
+ * DB_PATH permet de le placer ailleurs (par exemple sur un volume Docker).
+ */
+import { DatabaseSync } from 'node:sqlite';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+
+const dbPath = process.env.DB_PATH ?? 'data/tableau.db';
+mkdirSync(dirname(dbPath), { recursive: true });
+
+const db = new DatabaseSync(dbPath);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS message (
+    id         INTEGER PRIMARY KEY,
+    text       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )
+`);
+
+// Deux messages de départ, une seule fois, quand le tableau est vide.
+if (db.prepare('SELECT COUNT(*) AS n FROM message').get().n === 0) {
+  addMessage('Bienvenue sur le tableau.');
+  addMessage('Ce message vient de la base de départ.');
+}
+
+export function listMessages() {
+  return db
+    .prepare('SELECT id, text, created_at AS createdAt FROM message ORDER BY id')
+    .all();
+}
+
+export function addMessage(text) {
+  const createdAt = Date.now();
+  const { lastInsertRowid } = db
+    .prepare('INSERT INTO message (text, created_at) VALUES (?, ?)')
+    .run(text, createdAt);
+  return { id: lastInsertRowid, text, createdAt };
+}
+
+export function deleteMessage(id) {
+  return db.prepare('DELETE FROM message WHERE id = ?').run(id).changes > 0;
+}
+```
+
+Deux lignes à repérer dans ce code. Dans `server.js`, le port d'écoute
+vient de la variable d'environnement `PORT`, 8080 à défaut. Dans `db.js`,
+le fichier SQLite est créé au chemin donné par la variable `DB_PATH`,
+`data/tableau.db` à défaut. Dans l'image, c'est le `Dockerfile` qui fixe
+ces variables, avec `ENV`.
+
+À vous d'écrire, dans le dossier `tableau` :
+
+1. **`.dockerignore`** : deux lignes, `node_modules` et `data`. Le dossier
+   `data` est celui où l'application crée sa base quand on la lance sans
+   Docker ; il n'a rien à faire dans une image.
+2. **`Dockerfile`**, à partir de celui de `salut` :
+   1. Copiez le `Dockerfile` de `salut` dans `tableau`.
+   2. Changez `ENV PORT=8000` en `ENV PORT=8080`, et `EXPOSE 8000` en
+      `EXPOSE 8080` : le tableau écoute sur 8080.
+   3. Ajoutez, sous `ENV PORT=8080`, la ligne `ENV DB_PATH=/data/tableau.db`.
+      L'application créera sa base dans le dossier `/data`, à part du code
+      qui est dans `/app`. Ce dossier à part servira au jalon 3.
+   4. Vérifiez que `COPY package.json ./` et `RUN npm install --omit=dev`
+      sont bien **avant** `COPY . .`, comme dans `salut`.
+
+```bash
+docker build -t tableau .
+docker run -d --name tableau -p 8080:8080 tableau
+curl localhost:8080/
+curl localhost:8080/messages
+curl -X POST -H 'content-type: application/json' -d '{"text": "Bonjour"}' localhost:8080/messages
+curl localhost:8080/messages
+docker exec tableau ls /data
+```
+
+**Vérifier.** `curl localhost:8080/` répond un JSON avec `"machine"`
+(l'identifiant du conteneur) et `"node": "v24..."`. Après le `POST`,
+`/messages` liste trois messages. `ls /data` montre `tableau.db` : la base
+est bien là où `DB_PATH` la place. Dans l'onglet **Ports** de VS Code, le
+port 8080 est transféré : `http://localhost:8080/messages` s'ouvre aussi
+dans le navigateur de votre poste.
+
+## Jalon 3 : prédire, observer, expliquer (15 min)
+
+Ajoutez un message qui porte **votre nom** :
+
+```bash
+curl -X POST -H 'content-type: application/json' -d '{"text": "Message de <votre nom>"}' localhost:8080/messages
+curl localhost:8080/messages
+```
+
+**Prédisez, par écrit, avant d'exécuter.** Je détruis le conteneur et j'en
+relance un identique, à partir de la même image. Mon message est-il encore
+là ?
+
+```bash
+docker rm -f tableau
+docker run -d --name tableau -p 8080:8080 tableau
+curl localhost:8080/messages
+```
+
+Observez. Expliquez-vous la réponse avec les mots *image*, *conteneur* et
+*couche en écriture* (section [Un conteneur est
+jetable](/notes_de_cours/docker/conteneurs#un-conteneur-est-jetable-et-ses-fichiers-avec-lui)
+des notes). C'est la question 2 de la fin.
+
+Pour que les messages survivent, il faut les écrire ailleurs que dans le
+conteneur. Un **volume** est un dossier géré par Docker, qui existe en
+dehors de tout conteneur. L'option `-v tableau-data:/data` de `docker
+run` crée le volume `tableau-data` (s'il n'existe pas) et le fait
+apparaître dans le conteneur au chemin `/data`, exactement là où
+`DB_PATH` place la base. Recommencez avec cette option :
+
+```bash
+docker rm -f tableau
+docker run -d --name tableau -p 8080:8080 -v tableau-data:/data tableau
+curl -X POST -H 'content-type: application/json' -d '{"text": "Message de <votre nom>"}' localhost:8080/messages
+docker rm -f tableau
+docker run -d --name tableau -p 8080:8080 -v tableau-data:/data tableau
+curl localhost:8080/messages
+docker volume ls
+```
+
+**Vérifier.** Sans volume : après la destruction, le tableau est revenu à
+ses deux messages de départ. Avec le volume : votre message a survécu.
+`docker volume ls` montre `tableau-data`, qui existe sans le conteneur.
+
+Détruisez le conteneur avant le jalon 4, Compose voudra le port 8080 :
+
+```bash
+docker rm -f tableau
+```
+
+## Jalon 4 : `docker compose` (20 min)
+
+La commande `docker run` du jalon 3 est longue, et il faut s'en souvenir
+à chaque fois. Docker Compose la remplace par un fichier, `compose.yml`,
+qui décrit les mêmes choses une fois pour toutes : l'image à construire,
+le port à publier, le volume à monter. La page [Docker
+Compose](/notes_de_cours/docker/compose) explique chaque clé.
+
+Créez `compose.yml` dans le dossier `tableau`, à partir de ce squelette,
+en remplaçant chaque `...` :
+
+```yaml title="compose.yml"
+services:
+  tableau:                # le nom du service
+    build:
+      context: .          # comme le « . » de docker build
+    ports:
+      - "..."             # comme -p : hôte:conteneur, entre guillemets
+    volumes:
+      - ...               # comme -v : nom-du-volume:/chemin
+
+volumes:
+  ...:                    # le nom du volume, suivi de deux-points, rien d'autre
+```
+
+L'indentation est faite d'espaces, deux par niveau, jamais de tabulation.
+Puis :
+
+```bash
+docker compose up --build    # construit l'image, puis démarre le service
+```
+
+Quand le service annonce `Tableau sur http://localhost:8080`, dans un
+**second terminal** (dans VS Code : le `+` du panneau Terminal) :
+
+```bash
+curl -X POST -H 'content-type: application/json' -d '{"text": "Message de <votre nom>"}' localhost:8080/messages
+curl localhost:8080/messages
+```
+
+Puis, dans le premier terminal, `Ctrl+C`, et :
+
+```bash
+docker compose down          # arrête et détruit le conteneur, garde le volume
+docker compose up -d         # relance le service, en arrière-plan (-d), sans reconstruire
+curl localhost:8080/messages
+docker compose down -v       # détruit le conteneur ET le volume (-v)
+docker compose up -d
+curl localhost:8080/messages
+```
+
+**Vérifier.** Après `down` puis `up`, votre message est là. Après `down
+-v` puis `up`, il a disparu et les deux messages de départ sont revenus :
+vous savez réinitialiser une base. Laissez le service **tourner** (`docker
+compose ps` le montre `Up`) et ajoutez une dernière fois le message à
+votre nom : c'est ce que je viendrai voir.
+
+## Jalon 5 : les réponses (10 min)
+
+Dans le dossier `tableau`, un fichier `REPONSES.md`. Quelques phrases par
+question, en vos mots, avec les bons mots (image, conteneur, couche,
+volume, cache) :
+
+1. Quelle est la différence entre une image et un conteneur ? Donnez un
+   exemple tiré de cet atelier.
+2. Au jalon 3, sans le volume, qu'est devenu votre message quand vous avez
+   détruit le conteneur, et pourquoi ?
+3. Si `COPY . .` était placé **avant** `RUN npm install`, qu'est-ce qui
+   changerait à la deuxième construction de l'image, après une modification
+   de `server.js` ? Vous pouvez l'essayer : modifiez le `Dockerfile`,
+   relancez `docker build -t tableau .` deux fois en changeant `server.js`
+   entre les deux, et regardez quelles étapes sont `CACHED`. Remettez
+   ensuite le `Dockerfile` dans le bon ordre.
+
+Collez sous les réponses la sortie de `curl localhost:8080/` et de `docker
+volume ls`.
+
+## Montrer que ça marche
+
+Levez la main quand le jalon 5 est terminé ; je passe à votre poste. **Ne
+partez pas avant que j'aie vu votre travail.** Ce que je regarde, en deux
+minutes :
+
+1. `docker compose ps` : le service tourne.
+2. `curl localhost:8080/messages` : le message à votre nom y est.
+3. `docker compose down`, `docker compose up -d`, le même `curl` : le
+   message a survécu.
+4. Le `Dockerfile`, le `.dockerignore`, le `compose.yml` et `REPONSES.md`,
+   ouverts dans VS Code.
+
+## En panne ?
+
+- `permission denied while trying to connect to the Docker daemon socket` :
+  fermez le terminal, ouvrez-en un nouveau. Si ça persiste, appelez-moi.
+- `docker build` : `COPY failed` ou `not found` : la commande doit être
+  lancée **dans** le dossier qui contient le `Dockerfile` (`pwd` pour
+  vérifier, `ls -a` pour voir les fichiers, y compris `.dockerignore`).
+- `Cannot find module 'express'` au démarrage : `npm install` n'a pas
+  tourné dans le bon dossier, vérifiez `WORKDIR`, ou `COPY . .` a copié un
+  `node_modules` vide par-dessus le bon (`.dockerignore` manquant).
+- `port is already allocated` : un conteneur précédent tient le port.
+  `docker ps -a`, puis `docker rm -f <nom>`.
+- `SQLITE_CANTOPEN` : le dossier de `DB_PATH` n'a pas pu être créé.
+  Vérifiez la valeur de la variable dans le `Dockerfile` (`docker exec
+  tableau env`).
+- `curl` répond `Connection refused` : le conteneur est mort. `docker logs
+  tableau` dit pourquoi.
+- Rien dans le navigateur de votre poste : onglet **Ports** de VS Code,
+  ajoutez le port 8080 à la main. `curl` dans le terminal du serveur, lui,
+  marche toujours.
+- Le YAML de `compose.yml` : l'indentation compte, deux espaces par niveau,
+  jamais de tabulation. `docker compose config` valide le fichier.

@@ -1,0 +1,328 @@
+---
+sidebar_position: 1
+sidebar_label: "Docker : image, conteneur, volume"
+description: "Emballer une application Node dans une image, la faire tourner dans un conteneur jetable, garder ses données dans un volume"
+---
+
+# Docker : image, conteneur, volume
+
+« Ça marche sur ma machine. » Un coéquipier a Node 20, l'autre Node 24 ; un
+troisième a cloné dans OneDrive ; le serveur de production tourne sous une
+autre version de Linux. Docker règle ce problème en emballant
+l'application **avec** tout ce dont elle a besoin (Node, ses dépendances,
+son code) dans une **image** qu'on exécute partout de la même façon.
+
+## Trois mots
+
+- **Image** : un paquet figé, en lecture seule, construit à partir d'un
+  `Dockerfile`. Elle contient un système de fichiers complet : un Linux
+  minimal, Node, `node_modules`, votre code. On la construit une fois, on
+  l'exécute autant de fois qu'on veut.
+- **Conteneur** : une image en train de s'exécuter. Un processus isolé, avec
+  son propre système de fichiers (celui de l'image, plus une mince couche
+  en écriture), son propre réseau, ses propres ports. Un conteneur est
+  **jetable** : on le détruit et on en relance un autre à partir de la même
+  image, en une seconde.
+- **Registre** : un dépôt d'images. [Docker Hub](https://hub.docker.com)
+  héberge les images officielles (`node`, `postgres`, `nginx`) ; `docker
+  build` part presque toujours de l'une d'elles.
+
+Une image est faite de **couches**, une par instruction du `Dockerfile`.
+Chaque couche ne contient que ce qui a changé par rapport à la précédente,
+et Docker met les couches en cache : reconstruire une image dont seul le
+code a changé ne réinstalle pas Node.
+
+Un quatrième mot, pour comprendre les messages de Docker : le **démon**.
+C'est le service qui tourne en permanence sur la machine et qui fait tout
+le travail (construire, exécuter, stocker les images). La commande
+`docker` ne fait que lui parler.
+
+## Un Dockerfile, ligne par ligne
+
+Un projet jouet : un serveur Express qui dit bonjour et donne le nom de la
+machine.
+
+```js title="server.js"
+import express from 'express';
+import { hostname } from 'node:os';
+
+const app = express();
+app.get('/', (req, res) => {
+  res.send(`Bonjour depuis ${hostname()} (Node ${process.version})`);
+});
+
+const port = process.env.PORT ?? 8000;
+app.listen(port, () => console.log(`Salut sur le port ${port}`));
+```
+
+```json title="package.json"
+{
+  "name": "salut",
+  "type": "module",
+  "dependencies": { "express": "^5.2.1" }
+}
+```
+
+```dockerfile title="Dockerfile"
+# L'image de départ : Node 24 sur Alpine, un Linux de quelques Mo.
+FROM node:24-alpine
+
+# Le dossier de travail dans l'image ; les commandes suivantes s'y exécutent.
+WORKDIR /app
+
+# Le manifeste d'abord, seul : tant qu'il ne change pas, la couche
+# npm install est reprise du cache, même si le code change.
+COPY package.json ./
+RUN npm install --omit=dev
+
+# Le code ensuite. Le point final, c'est WORKDIR.
+COPY . .
+
+# Une variable d'environnement, lue par process.env.PORT.
+ENV PORT=8000
+
+# Documentation : ce conteneur écoute sur ce port. (N'ouvre rien tout seul.)
+EXPOSE 8000
+
+# La commande lancée au démarrage du conteneur.
+CMD ["node", "server.js"]
+```
+
+```text title=".dockerignore"
+node_modules
+```
+
+Le `Dockerfile` est une recette, lue de haut en bas. Chaque instruction :
+
+- **`FROM`** : l'image de départ, tirée de Docker Hub. `node:24-alpine`,
+  c'est l'image officielle `node`, étiquette `24-alpine` : Node 24
+  installé sur Alpine, une distribution Linux de quelques Mo. Tout ce qui
+  suit s'ajoute par-dessus.
+- **`WORKDIR`** : le dossier courant dans l'image, créé s'il n'existe pas.
+  Les `COPY`, `RUN` et `CMD` qui suivent s'exécutent là. Sans lui, tout
+  irait à la racine `/`.
+- **`COPY source destination`** : copie des fichiers de votre dossier
+  (le **contexte** de construction, voir `docker build`) vers l'image. La
+  destination est relative à `WORKDIR` : `./` et `.` veulent dire `/app`.
+- **`RUN`** : exécute une commande **pendant la construction**, dans
+  l'image telle qu'elle est à ce moment. Ici `npm install` produit
+  `node_modules` dans `/app`. `--omit=dev` laisse de côté les
+  `devDependencies`, inutiles à l'exécution.
+- **`ENV NOM=valeur`** : une variable d'environnement, présente dans
+  l'image et donc dans tout conteneur qui en part. Le programme la lit
+  avec `process.env.PORT`, comme s'il tournait sur votre poste avec la
+  variable définie.
+- **`EXPOSE`** : de la documentation. Ça dit « ce programme écoute sur le
+  port 8000 » ; ça n'ouvre aucun port vers l'extérieur (c'est le rôle de
+  `-p`, plus bas).
+- **`CMD`** : la commande lancée quand un conteneur **démarre**, pas
+  pendant la construction. Une seule par `Dockerfile`, écrite comme une
+  liste : le programme, puis ses arguments.
+
+Deux points qui ne sont pas des détails :
+
+- **L'ordre des `COPY`.** Le manifeste est copié seul, puis `npm install`,
+  puis le code. Chaque instruction est une couche, mise en cache tant que
+  ce qu'elle reçoit n'a pas changé. Le code change tout le temps ; le
+  manifeste, rarement. En copiant le code en dernier, `npm install` reste
+  en cache d'une construction à l'autre. Voir [Le cache des
+  couches](#le-cache-des-couches).
+- **`.dockerignore`.** Il liste ce que `docker build` ne doit pas envoyer
+  au démon, sur le modèle de `.gitignore`. `node_modules` est réinstallé
+  dans l'image par `RUN npm install` ; celui du poste (une autre version
+  de Node, un autre système) n'a rien à y faire, et sans cette ligne
+  `COPY . .` l'écraserait.
+
+Le projet jouet n'a pas de `package-lock.json` (personne n'a fait `npm
+install` sur le serveur : Node n'y est pas). Dès qu'un projet en a un, on
+copie aussi le `package-lock.json` et on préfère `npm ci`, qui installe
+exactement les versions verrouillées.
+
+## Construire une image
+
+```bash
+docker build -t salut .
+```
+
+- **`-t salut`** : le nom (*tag*) de l'image. Sans lui, l'image n'a qu'un
+  identifiant hexadécimal. On peut ajouter une étiquette, `salut:1.0` ;
+  à défaut, c'est `salut:latest`.
+- **`.`** : le **contexte**, le dossier envoyé au démon. `COPY` ne voit
+  que ce dossier, et le `Dockerfile` est cherché à sa racine. C'est
+  presque toujours le dossier courant, d'où le point.
+
+La sortie montre une étape par instruction. La première fois, `FROM`
+télécharge `node:24-alpine` depuis Docker Hub et `npm install` télécharge
+Express : une minute. Les fois suivantes, les étapes inchangées affichent
+`CACHED` et passent en un instant.
+
+`docker images` liste les images présentes sur la machine, avec leur nom,
+leur étiquette, leur taille. On y voit `salut`, `node` et tout ce qui a été
+téléchargé.
+
+## Exécuter un conteneur
+
+```bash
+docker run -d --name salut1 -p 8000:8000 salut
+```
+
+`docker run` crée un conteneur à partir de l'image `salut` et lance son
+`CMD`. Les options :
+
+- **`-d`** (*detached*) : en arrière-plan. Sans `-d`, le terminal reste
+  attaché au processus et affiche ce qu'il écrit ; `Ctrl+C` l'arrête.
+- **`--name salut1`** : le nom du conteneur, pour le désigner dans les
+  commandes suivantes. Sans lui, Docker en invente un (`brave_turing`).
+- **`-p hôte:conteneur`** : **publier** un port. Le conteneur a son propre
+  réseau ; sans `-p`, il écoute sur son port 8000 et personne ne le joint.
+  `-p 8000:8000` fait répondre le port 8000 de la machine par le port 8000
+  du conteneur. Les deux nombres sont indépendants : `-p 3000:8000` sert
+  le même conteneur sur le port 3000 de la machine.
+- **`-e NOM=valeur`** : une variable d'environnement, qui remplace celle
+  du `Dockerfile` pour ce conteneur. `docker run -e PORT=9000 -p 9000:9000
+  salut` fait écouter le programme sur 9000.
+- **`--rm`** : détruire le conteneur dès qu'il s'arrête. Pour une commande
+  qu'on lance une fois, comme `docker run --rm hello-world`.
+
+Ce qui se passe : `curl localhost:8000` répond `Bonjour depuis 3f2a9c1d0e4b
+(Node v24…)`. Le nom de machine que voit le programme est l'identifiant du
+conteneur : de son point de vue, il tourne sur une machine à lui, qui a
+Node 24 quelle que soit la version du poste. Un deuxième `docker run` de
+la même image, avec un autre nom et un autre port, donne un deuxième
+conteneur, un autre identifiant : deux machines distinctes, un seul
+`Dockerfile`.
+
+## Observer et gérer les conteneurs
+
+Une fois un conteneur lancé en arrière-plan, on ne le voit plus. Quelques
+commandes pour savoir ce qui se passe, toutes à partir du nom donné avec
+`--name`.
+
+**Qu'est-ce qui tourne ?**
+
+```bash
+docker ps
+```
+
+Un tableau : un conteneur par ligne, avec son nom, son image, son état
+(`Up 2 minutes`) et ses ports publiés. Si le conteneur qu'on vient de
+lancer n'y est pas, c'est qu'il s'est arrêté tout de suite, en général sur
+une erreur. `docker ps -a` montre aussi les conteneurs arrêtés.
+
+**Qu'est-ce qu'il a dit ?**
+
+```bash
+docker logs salut1
+```
+
+Tout ce que le programme a écrit avec `console.log` ou `console.error`,
+depuis le début. C'est ce qu'on aurait vu dans le terminal sans `-d`.
+Quand un conteneur ne répond pas ou s'est arrêté, c'est la première chose
+à regarder : l'erreur est là.
+
+**Regarder dedans**
+
+```bash
+docker exec -it salut1 sh
+```
+
+Ouvre un terminal **à l'intérieur** du conteneur, pendant qu'il tourne. On
+y est comme sur une petite machine Linux à part : `ls` montre le code et
+`node_modules` dans `/app`, `node -v` répond v24, `cat /etc/os-release`
+dit Alpine. `exit` en sort ; le conteneur continue de tourner.
+
+**Arrêter et détruire**
+
+```bash
+docker stop salut1     # arrêter le programme
+docker rm salut1       # supprimer le conteneur
+docker rm -f salut1    # les deux d'un coup
+```
+
+Un conteneur arrêté existe encore : il a toujours son nom, et on peut le
+relancer. Le supprimer efface tout ce qui lui appartenait, y compris les
+fichiers créés pendant qu'il tournait. En pratique, on se sert presque
+toujours de `docker rm -f`.
+
+Deux messages d'erreur courants viennent d'un conteneur qu'on a oublié :
+`The container name "salut1" is already in use` et `port is already
+allocated`. Dans les deux cas, `docker ps -a` pour le trouver, puis
+`docker rm -f`.
+
+## Le cache des couches
+
+Quand on modifie `server.js` et qu'on relance `docker build`, les couches
+jusqu'à `npm install` sont reprises du cache (`CACHED`) : seule la copie
+du code et ce qui suit est refait, en une seconde. Docker compare chaque
+instruction et les fichiers qu'elle reçoit avec la construction
+précédente ; dès qu'une couche change, elle et **toutes celles qui
+suivent** sont reconstruites.
+
+Si les deux `COPY` étaient inversés (le code avant le manifeste), la
+couche `COPY . .` changerait à chaque modification du code, et `npm
+install`, placé après, se réexécuterait à chaque construction. L'ordre
+des instructions est une décision de performance : ce qui change rarement
+en haut, ce qui change souvent en bas.
+
+## Un conteneur est jetable, et ses fichiers avec lui
+
+Un conteneur voit le système de fichiers de l'image, en lecture seule,
+plus une mince **couche en écriture** qui lui appartient. Un fichier créé
+pendant l'exécution (un journal, une base SQLite) vit dans cette couche.
+`docker stop` la garde ; `docker rm` l'emporte. Deux conteneurs de la même
+image ne partagent rien, et l'image, elle, ne change jamais : elle n'a
+jamais contenu ce fichier.
+
+C'est voulu : un conteneur doit pouvoir être remplacé sans regret, par un
+autre identique, sur une autre machine. Ce qui doit survivre se met dans
+un **volume**, un dossier géré par Docker, monté dans le conteneur, et qui
+existe indépendamment de lui.
+
+Prenons un programme qui garde ses données dans un fichier SQLite, au
+chemin donné par une variable `DB_PATH`, et dont l'image fixe
+`ENV DB_PATH=/data/tableau.db`. C'est l'application de [l'atelier
+1](/evaluations/atelier_1).
+
+```bash
+docker run -d --name tableau -p 8080:8080 -v tableau-data:/data tableau
+```
+
+**`-v nom:/chemin`** monte le volume nommé `tableau-data` (créé s'il
+n'existe pas) dans le conteneur, au chemin `/data`. Tout ce que le
+programme écrit dans `/data` est en fait écrit dans le volume, hors de la
+couche en écriture. Détruire le conteneur puis en relancer un autre avec
+le même `-v` : la base est là, avec ses données. Pour que ça serve, le
+programme doit écrire **là** : d'où `DB_PATH=/data/tableau.db`, un dossier
+à part, hors du dossier du code.
+
+```bash
+docker volume ls                    # les volumes de la machine
+docker volume inspect tableau-data  # où il est stocké, quand il a été créé
+docker volume rm tableau-data       # effacer, pour de bon (aucun conteneur ne doit l'utiliser)
+```
+
+Quand la base est un fichier SQLite, la leçon se constate avant de
+s'expliquer. C'est le jalon 3 de [l'atelier 1](/evaluations/atelier_1).
+
+:::info[Volume nommé ou dossier monté ?]
+
+`-v /home/moi/donnees:/data` monte un **dossier de la machine** au lieu
+d'un volume géré par Docker (on parle de *bind mount*). Pratique en
+développement (on voit les fichiers), moins portable (le chemin est celui
+d'une machine précise). Les volumes nommés sont la règle pour les données
+d'un service.
+
+:::
+
+## Sur le serveur pédagogique
+
+Cette semaine, Docker tourne sur un serveur Linux du cours, pas sur votre
+poste. Vous y travaillez avec VS Code, par SSH (extension *Remote - SSH*) :
+un terminal dans VS Code est un terminal sur le serveur, et l'explorateur
+de fichiers montre les fichiers du serveur. Quand un conteneur publie un
+port (`-p 8000:8000`), VS Code le **transfère** automatiquement vers votre
+poste (onglet *Ports*, à côté du terminal) : `localhost:8000` dans votre
+navigateur joint le conteneur du serveur. `curl localhost:8000` dans le
+terminal du serveur le joint directement, sans transfert.
+
+Sur ce serveur, Node n'est pas installé. C'est le point : Docker suffit.

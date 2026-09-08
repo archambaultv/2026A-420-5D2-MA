@@ -1,0 +1,128 @@
+---
+sidebar_position: 2
+sidebar_label: Docker Compose
+description: "Décrire un conteneur une fois dans un fichier, et le démarrer d'une commande : services, ports, volumes, variables d'environnement"
+---
+
+# Docker Compose
+
+Lancer l'application de l'atelier demande une longue commande, qu'il faut
+retaper à chaque fois sans se tromper :
+
+```bash
+docker build -t tableau .
+docker run -d --name tableau -p 8080:8080 -v tableau-data:/data tableau
+```
+
+Docker Compose remplace ces commandes par un fichier, `compose.yml`, posé
+à côté du `Dockerfile`. Le fichier décrit **une fois** ce qu'il faut
+construire, publier et monter ; une seule commande fait ensuite tout ça.
+C'est ce fichier qu'un coéquipier trouve en clonant le dépôt : il tape
+`docker compose up`, et l'application tourne, sans lire le `README`.
+
+## `compose.yml`
+
+```yaml title="compose.yml"
+services:
+  tableau:                     # un service : un conteneur à lancer, et son nom
+    build:
+      context: .               # le dossier envoyé à docker build (le « . »)
+    ports:
+      - "8080:8080"            # comme -p : port de la machine, port du conteneur
+    volumes:
+      - tableau-data:/data     # comme -v : le volume nommé, et où il apparaît
+    environment:
+      PORT: "8080"             # comme -e : remplace la valeur du Dockerfile
+
+volumes:
+  tableau-data:                # la déclaration du volume nommé (vide : rien à configurer)
+```
+
+Le fichier est en YAML : l'indentation fait la structure, deux espaces par
+niveau, jamais de tabulation. Les clés :
+
+- **`services`** : la liste des conteneurs à lancer. Chaque clé en dessous
+  (`tableau`) est le nom d'un service ; Compose s'en sert pour nommer le
+  conteneur et l'image.
+- **`build`** : dire à Compose de construire l'image avec `docker build`.
+  `context` est le dossier envoyé, presque toujours `.`. Le `Dockerfile`
+  est cherché à la racine de ce dossier ; s'il est ailleurs, on ajoute la
+  clé `dockerfile: chemin/Dockerfile`. Pour utiliser une image toute faite
+  de Docker Hub à la place, on écrit `image: postgres:17` au lieu de
+  `build`.
+- **`ports`** : les ports à publier, une ligne par port, écrits
+  `"hôte:conteneur"` entre guillemets (sans guillemets, YAML peut lire
+  `8080:8080` comme une heure).
+- **`volumes`** dans le service : ce qu'on monte, `nom:/chemin`, une ligne
+  par volume.
+- **`environment`** : des variables d'environnement pour ce conteneur.
+  Facultatif si le `Dockerfile` les fixe déjà ; utile pour en changer sans
+  reconstruire l'image.
+- **`volumes`** tout en bas, au même niveau que `services` : la
+  déclaration des volumes nommés utilisés plus haut. Le nom, deux-points,
+  rien d'autre. Pourquoi vide ? Un volume n'a pas d'options à donner dans
+  le cas courant : Docker choisit lui-même où le stocker sur la machine.
+  La ligne dit seulement « ce volume existe, crée-le s'il n'y est pas ».
+  Sans elle, Compose refuse le fichier : un service ne peut pas monter un
+  volume qui n'est déclaré nulle part.
+
+`docker compose config` relit le fichier et l'affiche tel que Compose le
+comprend ; c'est la façon de vérifier le YAML avant de lancer.
+
+## Les commandes
+
+```bash
+docker compose up --build     # construire l'image si besoin, puis démarrer (Ctrl+C arrête)
+docker compose up -d          # démarrer en arrière-plan
+docker compose ps             # les conteneurs de ce compose.yml
+docker compose logs tableau   # ce que le service a écrit
+docker compose exec tableau sh   # un terminal dans le service
+docker compose down           # arrêter et détruire les conteneurs (les volumes restent)
+docker compose down -v        # ... et effacer les volumes aussi
+```
+
+Toutes ces commandes se lancent dans le dossier du `compose.yml`, et
+s'appliquent à ce qui y est décrit. Ce sont les commandes `docker` du
+chapitre précédent, avec les options lues dans le fichier.
+
+- **`up`** construit (avec `--build`, ou la première fois), crée le
+  volume s'il n'existe pas, crée les conteneurs et les démarre. Sans
+  `-d`, le terminal affiche les journaux de tous les services ; `Ctrl+C`
+  les arrête sans les détruire.
+- **`down`** arrête et **détruit** les conteneurs, comme `docker rm -f`.
+  Les volumes nommés restent : les données survivent. Le prochain `up`
+  repart de la même base.
+- **`down -v`** détruit aussi les volumes. C'est la façon de remettre une
+  base à zéro : au prochain `up`, le programme repart d'un dossier `/data`
+  vide.
+
+## Plusieurs services
+
+Un `compose.yml` peut décrire plusieurs services : une application et sa
+base de données, par exemple. Compose les met dans un réseau privé où
+chaque service est joignable **par son nom** : un service `postgres` se
+joint à l'adresse `postgres:5432`, sans adresse IP, sans `localhost`. La
+clé `depends_on` fixe l'ordre de démarrage.
+
+```yaml
+services:
+  tableau:
+    build:
+      context: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres           # postgres démarre avant tableau
+
+  postgres:
+    image: postgres:17     # une image de Docker Hub, rien à construire
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+volumes:
+  pg-data:
+```
+
+C'est le programme de la semaine 4 : l'application du cours avec PostgreSQL dans un
+conteneur, joint par son nom de service. En semaine 12, le même
+`compose.yml` tournera sur un serveur public.
