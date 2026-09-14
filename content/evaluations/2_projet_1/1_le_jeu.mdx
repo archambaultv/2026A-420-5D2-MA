@@ -1,0 +1,65 @@
+---
+sidebar_position: 1
+sidebar_label: Le jeu
+description: "Projet 1 : ce que fait l'application, l'appariement des joueurs, la fin d'une partie et le classement Elo"
+---
+
+# Le jeu
+
+Une application où deux personnes jouent une partie d'échecs l'une contre
+l'autre, chacune depuis son navigateur. **Un joueur** se connecte avec son
+compte GitHub. Il a un nom et un classement Elo : un entier de 100 à 3000. Un
+nouveau joueur est inscrit avec un Elo de 1000.
+
+Deux façons de trouver un adversaire :
+
+- **la partie privée** : on la crée, on reçoit un **code**, on donne le code à
+  la personne de son choix, qui rejoint avec ce code ;
+- **la partie publique** : on la crée et on attend, ou bien on en rejoint une
+  au hasard parmi celles en attente dont l'écart d'Elo est raisonnable.
+
+:::info[Les règles des échecs]
+
+Les règles des échecs elles-mêmes (coups légaux, échec, mat, pat) ne sont pas
+l'objectif du cours. Prenez une bibliothèque existante (`chess.js`, par
+exemple) ou faites-vous en générer une par IA : dans les deux cas, isolez-la
+derrière un module à vous. Vous n'avez pas à comprendre le fonctionnement
+interne de cette bibliothèque, mais vous devez justifier son choix et
+expliquer comment vous l'avez intégrée dans votre application.
+
+:::
+
+## L'appariement public
+
+Quand un joueur demande à rejoindre une partie publique, le serveur regarde
+les parties publiques en attente, garde celles dont l'hôte est à **±200 points
+d'Elo** du demandeur, et en tire une au hasard. S'il n'y en a aucune, il le dit
+et propose d'en créer une.
+
+Une même personne ne peut pas jouer contre elle-même. Les couleurs sont tirées
+au sort à l'appariement.
+
+## La fin d'une partie
+
+Une partie se termine de trois façons : par **mat**, par **nulle** (pat,
+répétition, matériel insuffisant, règle des cinquante coups) ou par
+**abandon**. Un joueur peut abandonner à tout moment ; la partie est alors
+perdue pour lui et gagnée pour son adversaire. Dans les trois cas, le
+classement des deux joueurs est mis à jour.
+
+## Le classement
+
+Le classement Elo évite que les joueurs débutants affrontent des joueurs très
+expérimentés. Il est mis à jour après chaque partie terminée, même si elle est
+privée, et même si elle s'est terminée par un abandon. Le calcul se fait par
+la formule suivante :
+
+```
+attendu(A) = 1 / (1 + 10 ** ((eloB - eloA) / 400))
+nouvelElo(A) = eloA + 20 * (score(A) - attendu(A))
+```
+
+où `score(A)` vaut 1, 0,5 ou 0 selon que A gagne, annule ou perd. Celui qui
+abandonne perd. Le résultat
+est arrondi à l'entier le plus proche, puis ramené dans l'intervalle 100 à
+3000.

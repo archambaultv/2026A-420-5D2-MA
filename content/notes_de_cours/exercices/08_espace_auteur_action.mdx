@@ -43,7 +43,7 @@ Regardez ce qui est nouveau : `server/src/server.js` a trois routes de plus
 transaction. Lisez la fonction `validateQuestion` de `server.js` : c'est
 elle qui décide ce qu'est une question valide.
 
-## Jalon ① : créer un questionnaire
+## Jalon 1 : créer un questionnaire
 
 - **Fichier** : `client/app/routes/quizzes.jsx`
 
@@ -54,11 +54,11 @@ si l'API refuse, sinon `redirect(…)` vers l'éditeur. C'est exactement la
 démonstration.
 
 **Vérifier.** Créer un questionnaire vous emmène sur `/quizzes/N/edit` (qui
-répond « À faire » pour l'instant : c'est le jalon ②). De retour sur
+répond « À faire » pour l'instant : c'est le jalon 2). De retour sur
 `/quizzes`, il est dans la liste, avec 0 question. `npm run verifier` :
 **48 sur 54**.
 
-## Jalon ② : l'éditeur
+## Jalon 2 : l'éditeur
 
 - **Fichier** : `client/app/routes/quiz-edit.jsx`
 
@@ -78,7 +78,7 @@ formulaire, sans rechargement, et le formulaire se vide. Onglet Réseau : un
 `POST` sur `edit.data`, puis la page mise à jour. `npm run verifier` :
 **51 sur 54**.
 
-## Jalon ③ : afficher les erreurs
+## Jalon 3 : afficher les erreurs
 
 - **Fichiers** : `quizzes.jsx` et `quiz-edit.jsx`
 
@@ -91,7 +91,7 @@ il reste à l'afficher : `useActionData()` dans le composant, et un
 sous le champ. Une question sans bouton radio coché : « Une question a
 exactement une bonne réponse. » `npm run verifier` : **53 sur 54**.
 
-## Jalon ④ : retirer une question
+## Jalon 4 : retirer une question
 
 - **Fichier** : `quiz-edit.jsx`
 

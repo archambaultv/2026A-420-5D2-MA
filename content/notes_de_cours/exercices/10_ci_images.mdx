@@ -1,0 +1,128 @@
+---
+sidebar_position: 10
+sidebar_label: 9. Intégration continue et livraison
+description: "Quiz M9, semaine 4 : GitHub Actions exécute les tests à chaque push, publie les images dans ghcr.io, et le serveur pédagogique les tire ; latest contre un tag épinglé"
+---
+
+# Exercice 9 : intégration continue et livraison
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre. La première
+moitié se fait sur votre poste, la seconde sur le serveur pédagogique.
+
+:::
+
+Le dépôt contient depuis cette semaine `.github/workflows/ci.yml` et
+`deploy/compose.yml`. Notes à garder ouvertes : [Intégration continue et
+registre](/notes_de_cours/qualite/integration_continue). Cet exercice ne
+dépend pas de l'exercice 8 : les tests fournis suffisent à la CI.
+
+## Étape 0 : votre dépôt
+
+La CI tourne sur **votre** dépôt GitHub, pas sur celui du cours.
+
+1. Sur GitHub, créez un dépôt **public** et vide (sans README) : `quiz-m9`.
+2. Dans votre clone, le dépôt du cours devient `upstream` et le vôtre
+   `origin` :
+
+   ```bash
+   git checkout main
+   git pull
+   git remote rename origin upstream
+   git remote add origin https://github.com/VOTRE-COMPTE/quiz-m9.git
+   git push -u origin main
+   git push -u origin sem-04       # si vous avez la branche de l'exercice 8
+   ```
+
+   Les prochaines semaines, `git pull upstream main` ramène le travail du
+   cours dans votre `main`.
+
+**Vérifier.** Onglet **Actions** de votre dépôt : un workflow *CI* tourne
+sur `main`. Ouvrez-le pendant qu'il tourne : `test`, puis `image`.
+
+## Jalon 1 : la première image
+
+Quand `image` est vert, la page de votre compte a un onglet **Packages**
+avec `quizm9-api` et `quizm9-client`. Pour chacun : *Package settings*,
+*Change visibility*, *Public*.
+
+**Vérifier.** Sur votre poste, `docker pull ghcr.io/VOTRE-COMPTE/quizm9-api:latest`
+sans être connecté au registre. Sur la page du paquet, deux tags :
+`latest` et `sha-…`, le même commit que le haut de `main`.
+
+## Jalon 2 : la régression refusée
+
+Sur une branche, cassez le pointage et proposez-le quand même.
+
+```bash
+git checkout -b regression
+# dans server/src/scoring.js : return 4 + speedBonus + firstBonus;
+git commit -am "Ajuste le pointage"
+git push -u origin regression
+```
+
+Sur GitHub, ouvrez une **demande de tirage** de `regression` vers `main`.
+Attendez le verdict. Rouge : ouvrez le journal de `test` et trouvez la
+ligne du test qui a échoué. `image` n'a pas tourné.
+
+Corrigez (`5`), `commit`, `push` : la demande de tirage se met à jour,
+vert. Fusionnez (*Merge pull request*). Onglet Actions : le `push` sur
+`main` produit une nouvelle image, avec un nouveau tag `sha-…`.
+
+**Vérifier.** La page du paquet `quizm9-api` a deux tags `sha-…` et
+`latest` pointe sur le plus récent.
+
+## Jalon 3 : sur le serveur, sans code source
+
+Sur le serveur pédagogique (VS Code, Remote - SSH, comme à l'atelier 1).
+Il n'y a pas de Node, et vous ne clonerez pas le dépôt.
+
+```bash
+mkdir quizm9 && cd quizm9
+curl -O https://raw.githubusercontent.com/VOTRE-COMPTE/quiz-m9/main/deploy/compose.yml
+printf 'OWNER=votre-compte\nTAG=latest\n' > .env     # en minuscules
+docker compose pull
+docker compose up -d
+docker compose ps
+```
+
+**Vérifier.** Onglet Ports de VS Code, port 5173 : Quiz M9. Jouez une
+partie à deux navigateurs. `docker compose images` : les deux images
+viennent de `ghcr.io`, tag `latest`.
+
+## Jalon 4 : `latest` bouge, `sha` ne bouge pas
+
+Sur votre poste, sur `main`, changez le titre de la page d'accueil
+(`client/app/routes/home.jsx`), `commit`, `push`. Attendez le vert.
+
+**Prédisez** avant de taper : sur le serveur, après `docker compose pull`
+puis `docker compose up -d`, que voit-on sur le port 5173 ? Et la partie
+jouée au jalon 3, existe-t-elle encore ?
+
+Faites-le. Puis épinglez : dans `.env`, remplacez `latest` par le tag
+`sha-…` de l'image qui tourne (`docker compose images` le donne).
+`pull`, `up -d` : rien ne change. Poussez un autre changement de titre sur
+`main`, attendez le vert, `pull`, `up -d` sur le serveur : **rien ne
+change** non plus. La prod ne bouge plus tant que vous ne changez pas
+`TAG`. Mettez-la à jour exprès : le nouveau `sha-…` dans `.env`, `pull`,
+`up -d`.
+
+**Vérifier.** `docker compose images` montre un tag `sha-…`, pas `latest`.
+Vous savez dire quel commit tourne.
+
+
+## En panne ?
+
+- `image` est *skipped* : normal sur une branche autre que `main`.
+- `denied` au `docker pull` sur le serveur : le paquet est encore privé
+  (jalon 1), ou `OWNER` a une majuscule.
+- `docker compose pull` dit *manifest unknown* : le tag dans `.env`
+  n'existe pas ; comparez avec la page du paquet.
+- `up -d` ne change rien après un `pull` : l'image tirée est la même
+  (le tag est épinglé, ou `image` n'a pas encore fini). `docker compose
+  images` et l'onglet Actions.
+- Le port 5173 est déjà pris sur le serveur : un conteneur de l'atelier
+  ou de la semaine 3 tourne encore. `docker ps`, `docker rm -f`.
+- La CI est rouge sur `npm ci` : `package-lock.json` n'est pas à jour avec
+  `package.json`. `npm install` sur votre poste, puis commit du lock.

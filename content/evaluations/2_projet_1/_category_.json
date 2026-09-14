@@ -1,0 +1,10 @@
+{
+  "label": "Projet 1",
+  "position": 2,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "slug": "/projet_1",
+    "description": "L'énoncé du projet 1 : le jeu, les récits, les exigences techniques, la remise et les critères."
+  }
+}

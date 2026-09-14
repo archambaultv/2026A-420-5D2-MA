@@ -12,7 +12,7 @@ autre version de Linux. Docker règle ce problème en emballant
 l'application **avec** tout ce dont elle a besoin (Node, ses dépendances,
 son code) dans une **image** qu'on exécute partout de la même façon.
 
-## Trois mots
+## Image, conteneur, registre
 
 - **Image** : un paquet figé, en lecture seule, construit à partir d'un
   `Dockerfile`. Elle contient un système de fichiers complet : un Linux
@@ -32,10 +32,10 @@ Chaque couche ne contient que ce qui a changé par rapport à la précédente,
 et Docker met les couches en cache : reconstruire une image dont seul le
 code a changé ne réinstalle pas Node.
 
-Un quatrième mot, pour comprendre les messages de Docker : le **démon**.
-C'est le service qui tourne en permanence sur la machine et qui fait tout
-le travail (construire, exécuter, stocker les images). La commande
-`docker` ne fait que lui parler.
+Un quatrième concept, pour comprendre les messages de Docker : le
+**démon**. C'est le service qui tourne en permanence sur la machine et qui
+fait tout le travail (construire, exécuter, stocker les images). La
+commande `docker` ne fait que lui parler.
 
 ## Un Dockerfile, ligne par ligne
 

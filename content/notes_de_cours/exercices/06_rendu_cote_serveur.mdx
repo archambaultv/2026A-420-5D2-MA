@@ -31,7 +31,7 @@ Prenez ensuite trente secondes pour constater le problème : ouvrez
 `http://localhost:5173/quizzes`, puis affichez le code source de la page
 (`Ctrl+U`). Cherchez le titre d'un questionnaire : il n'y est pas.
 
-## Jalon ① : le loader de la liste
+## Jalon 1 : le loader de la liste
 
 - **Fichier** : `client/app/routes/quizzes.jsx`
 
@@ -45,11 +45,11 @@ l'adresse : dans un `loader`, l'API s'appelle au complet,
 dans le HTML. `npm run verifier` : la première vérification de la section
 **Partie 2** passe (45 sur 46).
 
-## Jalon ② : le loader du détail
+## Jalon 2 : le loader du détail
 
 - **Fichier** : `client/app/routes/quiz-details.jsx`
 
-Même conversion, en vous calquant sur le jalon ①, avec deux différences que
+Même conversion, en vous calquant sur le jalon 1, avec deux différences que
 le `TODO` sur place précise : le `loader` reçoit `{ params }` et `params.id`
 remplace `useParams()` ; et si l'API répond 404, levez `new
 Response('Questionnaire introuvable.', { status: 404 })` pour que la page
