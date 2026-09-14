@@ -18,6 +18,10 @@
 const echeances = {
   // À remplir en même temps que les énoncés. Exemple de la forme attendue :
   // atelier_1: {1: 'le mardi 15 septembre 2026', 2: 'le jeudi 17 septembre 2026'},
+  projet_1: {
+    1: 'le mercredi 7 octobre 2026, à 23 h 59',
+    2: 'le mardi 6 octobre 2026, à 23 h 59',
+  },
 };
 
 export default echeances;

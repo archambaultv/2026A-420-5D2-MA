@@ -58,7 +58,6 @@ export default function createConfig(groupe) {
       // Le même fichier sert aux trois instances : `dirName: '.'` désigne la
       // racine du dossier de l'instance courante, quelle qu'elle soit.
       sidebarPath: './sidebars.js',
-      editUrl: `${REPO_URL}/tree/main/${contentPath}/`,
     }),
   ];
 

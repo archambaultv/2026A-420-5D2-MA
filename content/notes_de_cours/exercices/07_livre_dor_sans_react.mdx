@@ -29,7 +29,7 @@ L'application écoute sur `http://localhost:8080` (elle peut tourner en même
 temps que Quiz M9). Ouvrez-la : pour l'instant, la route `GET /` répond du
 JSON brut. C'est le point de départ.
 
-## Jalon ① : le gabarit
+## Jalon 1 : le gabarit
 
 - **Fichiers** : `server.js` (route `GET /`) et `views/index.ejs`
 
@@ -67,7 +67,7 @@ d'un seul message, celui qu'on lui passe sous le nom `m`.
 est dans le HTML. Onglet Réseau : le document, la feuille de style, et
 **aucun JavaScript**.
 
-## Jalon ② : le formulaire, sans JavaScript
+## Jalon 2 : le formulaire, sans JavaScript
 
 - **Fichiers** : `views/index.ejs` et `server.js` (route `POST /messages`)
 
@@ -97,7 +97,7 @@ ne renvoie pas le formulaire (sans la redirection, chaque rechargement referait
 le `POST` et signerait le livre une fois de plus). L'interactivité du web a
 fonctionné exactement comme ça pendant vingt ans.
 
-## Jalon ③ : htmx
+## Jalon 3 : htmx
 
 - **Fichiers** : `views/index.ejs`, `views/message.ejs` et `server.js`
   (route `DELETE /messages/:id`)
@@ -166,11 +166,11 @@ sa réponse n'est **pas du JSON**, c'est du HTML (vide, ici). Personne n'a
 écrit de `fetch`, ni de `useState` : le serveur reste le seul responsable du
 HTML.
 
-## Jalon ④ : signer sans recharger
+## Jalon 4 : signer sans recharger
 
 - **Fichiers** : `views/index.ejs` et `server.js` (route `POST /messages`)
 
-Le formulaire du jalon ② recharge la page à chaque signature. Confions-le
+Le formulaire du jalon 2 recharge la page à chaque signature. Confions-le
 aussi à htmx : ajoutez trois attributs au `<form>`, **sans retirer**
 `method` ni `action` :
 
@@ -189,7 +189,7 @@ aussi à htmx : ajoutez trois attributs au `<form>`, **sans retirer**
   vider les champs du formulaire.
 
 Pourquoi garder `method` et `action` ? Si htmx ne charge pas, le formulaire
-classique du jalon ② fonctionne encore : c'est l'**amélioration
+classique du jalon 2 fonctionne encore : c'est l'**amélioration
 progressive** vue dans les notes de cours.
 
 Côté serveur, la route ne peut plus se contenter de `res.redirect('/')` :
@@ -212,7 +212,7 @@ de HTML (cliquez sur la requête pour le voir), plus de `302`. Et le bouton
 Supprimer du nouveau message fonctionne déjà : le fragment renvoyé, c'est
 `message.ejs` au complet, bouton compris.
 
-## Jalon ⑤ : l'attaque XSS
+## Jalon 5 : l'attaque XSS
 
 Le livre d'or accepte n'importe quel texte. N'importe qui peut le signer.
 Un test s'impose.
@@ -247,7 +247,7 @@ texte affiché. Supprimez le message piégé.
 
 La règle à retenir : **une donnée qui vient de l'utilisateur s'affiche
 toujours avec `<%= %>`**. On ne réserve `<%- %>` qu'au HTML qu'on a produit
-soi-même, comme le `include('message', ...)` du jalon ①. React applique la
+soi-même, comme le `include('message', ...)` du jalon 1. React applique la
 même règle par défaut, ce qui explique le nom de sa porte de sortie :
 `dangerouslySetInnerHTML`.
 
@@ -261,11 +261,11 @@ même règle par défaut, ce qui explique le nom de sa porte de sortie :
 - `Cannot POST /messages` : le `action` ou le `method` du formulaire ne
   correspond pas à la route.
 - Le bouton Supprimer ne fait rien : htmx n'est pas chargé (la balise
-  `<script>` du jalon ③), ou un attribut `hx-` est mal orthographié.
+  `<script>` du jalon 3), ou un attribut `hx-` est mal orthographié.
 - `EADDRINUSE` au démarrage : un autre programme occupe le port 8080.
-- Jalon ④, la page se recharge quand même : htmx n'a pas intercepté l'envoi.
+- Jalon 4, la page se recharge quand même : htmx n'a pas intercepté l'envoi.
   Vérifiez `hx-post` sur le `<form>` (pas sur le `<button>`).
-- Jalon ④, la page entière apparaît dans la liste : la route répond encore
+- Jalon 4, la page entière apparaît dans la liste : la route répond encore
   `res.redirect('/')` pour tout le monde, le test sur `HX-Request` manque.
-- Jalon ④, le message s'ajoute deux fois : `hx-swap` vaut `beforeend`, et non
+- Jalon 4, le message s'ajoute deux fois : `hx-swap` vaut `beforeend`, et non
   `outerHTML` ou `innerHTML`.

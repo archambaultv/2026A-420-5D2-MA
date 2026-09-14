@@ -1,0 +1,58 @@
+---
+sidebar_position: 1
+sidebar_label: Le jeu
+description: "Projet 1 : ce que fait l'application, la partie privée, la fin d'une partie et le classement Elo"
+---
+
+# Le jeu
+
+Une application où deux personnes jouent une partie d'échecs l'une contre
+l'autre, chacune depuis son navigateur. **Un joueur** se connecte avec son
+compte GitHub. Il a un nom et un classement Elo : un entier de 100 à 3000. Un
+nouveau joueur est inscrit avec un Elo de 1000.
+
+Pour trouver un adversaire, on crée une **partie privée** : on reçoit un
+**code**, on le donne à la personne de son choix, qui rejoint avec ce code.
+
+:::info[Les règles des échecs]
+
+Les règles des échecs elles-mêmes (coups légaux, échec, mat, pat) ne sont pas
+l'objectif du cours. Prenez une bibliothèque existante (`chess.js`, par
+exemple). Vous n'avez pas à comprendre le fonctionnement interne de cette
+bibliothèque, mais vous devez justifier son choix et expliquer comment vous
+l'avez intégrée dans votre application.
+
+:::
+
+## La partie privée
+
+Un code est valide une seule fois : un code inconnu ou déjà utilisé est refusé.
+Une même personne ne peut pas jouer contre elle-même. Les couleurs sont tirées
+au sort quand l'adversaire rejoint.
+
+## La fin d'une partie
+
+Une partie se termine de trois façons : par **mat**, par **nulle** (pat,
+répétition, matériel insuffisant, règle des cinquante coups) ou par
+**abandon**. Un joueur peut abandonner à tout moment ; la partie est alors
+perdue pour lui et gagnée pour son adversaire. Dans les trois cas, le
+classement des deux joueurs est mis à jour.
+
+Pour la partie nulle, il est possible de négliger les règles de répétition, de
+matériel insuffisant ou des cinquante coups dans ce projet.
+
+## Le classement
+
+Le classement Elo mesure la force d'un joueur. Il est mis à jour après chaque
+partie terminée, même si elle s'est terminée par un abandon. Le calcul se fait
+par la formule suivante :
+
+```
+attendu(A) = 1 / (1 + 10 ** ((eloB - eloA) / 400))
+nouvelElo(A) = eloA + 20 * (score(A) - attendu(A))
+```
+
+où `score(A)` vaut 1, 0,5 ou 0 selon que A gagne, annule ou perd. Celui qui
+abandonne perd. Le résultat
+est arrondi à l'entier le plus proche, puis ramené dans l'intervalle 100 à
+3000.

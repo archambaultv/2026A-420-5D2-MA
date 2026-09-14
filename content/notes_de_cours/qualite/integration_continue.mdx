@@ -1,0 +1,240 @@
+---
+sidebar_position: 2
+sidebar_label: Intégration continue et registre
+description: "GitHub Actions exécute les tests à chaque push, construit les images Docker et les publie dans un registre ; sur le serveur, docker compose pull, et le tag qui épingle une version"
+---
+
+# Intégration continue et registre d'images
+
+`npm test` sur son poste, c'est bien ; ça ne dit rien du poste du
+coéquipier, ni de la branche qu'il vient de pousser sans lancer les
+tests. L'**intégration continue** (CI), c'est une machine neuve qui, à
+chaque `push`, clone le dépôt, installe, teste, et affiche le résultat à
+côté du commit. Sur GitHub, l'outil s'appelle **GitHub Actions**, et il se
+configure avec un fichier dans le dépôt.
+
+## GitHub workflow
+
+GitHub regarde le dossier `.github/workflows/` de chaque dépôt. Chaque
+fichier `.yml` qu'il y trouve est un **workflow** : une liste de commandes
+à exécuter, et l'événement qui les déclenche. Le nôtre s'appelle
+`ci.yml`.
+
+### Le travail `test`
+
+Commençons par créer un workflow pour exécuter les tests unitaire et
+d'intégration.
+
+```yaml title=".github/workflows/ci.yml"
+name: CI
+
+on:
+  push:                       # à chaque push, sur n'importe quelle branche
+
+jobs:
+  test:
+    runs-on: ubuntu-latest    # une machine virtuelle neuve, Linux
+    steps:
+      - uses: actions/checkout@v7          # git clone du commit poussé
+      - uses: actions/setup-node@v7        # installe Node
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci                        # comme npm install, mais depuis package-lock.json
+      - run: npm test
+```
+
+Lisez les `steps` comme ce que vous feriez sur une machine vide qu'on
+vient de vous prêter :
+
+1. **`uses: actions/checkout@v7`**. Une **action** est un morceau de
+   workflow écrit par quelqu'un d'autre, publié dans un dépôt GitHub.
+   `actions/checkout` est le dépôt, `@v7` la version. Celle-ci fait `git
+   clone` du dépôt et se place sur le commit qui vient d'être poussé. Sans
+   elle, la machine est vide.
+2. **`uses: actions/setup-node@v7`**. Installe Node. `with` donne les
+   options de l'action : la version 24 (celle du `Dockerfile`), et
+   `cache: npm` garde une copie des paquets téléchargés d'une exécution à
+   l'autre pour que `npm ci` aille plus vite.
+3. **`run: npm ci`**. `run` exécute une commande dans un terminal, à la
+   racine du clone. `npm ci` installe exactement ce que dit
+   `package-lock.json`, sans le modifier, et refuse si `package.json` et
+   le lock ne concordent pas. C'est la commande pour une machine neuve ;
+   `npm install` est celle pour votre poste. Cette dernière peut mettre
+   à jour les dépendances et réécrire le lock ; sur le serveur, on veut
+   tester les versions exactes que vous avez testées.
+4. **`run: npm test`**. Les tests de la semaine 4. Une commande qui
+   échoue (code de sortie différent de zéro) arrête le job, en rouge.
+
+Le résultat est dans l'onglet **Actions** du dépôt. Chaque `push` y a sa
+ligne ; en cliquant, on voit chaque job, puis chaque étape avec son
+journal. Ce journal est exactement ce que la commande aurait affiché dans
+votre terminal : un test rouge y apparaît comme il apparaît chez vous. Le
+même symbole, ✔ ou ✖, apparaît à côté du commit et dans la demande de
+tirage.
+
+:::info[Trouver une action]
+
+Le [marketplace](https://github.com/marketplace?type=actions) en compte des
+milliers ; `checkout` et `setup-node` couvrent 90 % des projets Node.
+
+:::
+
+### Le travail `image`
+
+Le second job de `ci.yml`. Il ne teste rien : il fabrique les deux images
+Docker de Quiz M9 et les envoie dans un registre.
+
+```yaml title=".github/workflows/ci.yml (suite)"
+  image:
+    needs: test                            # seulement si test a réussi
+    if: github.ref == 'refs/heads/main'    # et seulement sur main
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write                      # le droit de publier dans le registre
+    steps:
+      - uses: actions/checkout@v7
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - run: |
+          OWNER=${GITHUB_REPOSITORY_OWNER,,}
+          SHA=sha-${GITHUB_SHA::7}
+
+          docker build -f server/Dockerfile \
+            -t ghcr.io/$OWNER/quizm9-api:latest \
+            -t ghcr.io/$OWNER/quizm9-api:$SHA .
+          docker push --all-tags ghcr.io/$OWNER/quizm9-api
+
+          docker build -f client/Dockerfile \
+            -t ghcr.io/$OWNER/quizm9-client:latest \
+            -t ghcr.io/$OWNER/quizm9-client:$SHA .
+          docker push --all-tags ghcr.io/$OWNER/quizm9-client
+```
+
+**Quand il tourne.** `needs: test` l'enchaîne après `test` : il attend, et
+ne démarre pas si `test` est rouge. `if` le limite à la branche `main` :
+sur une autre branche, le job est marqué *skipped*. Les deux ensemble :
+une régression ne devient jamais une image, et une branche de travail
+n'en produit pas non plus.
+
+**`${{ … }}`.** Les accolades doubles sont remplacées par GitHub avant
+d'exécuter la commande, comme `${...}` en bash mais avec les variables de
+GitHub. `github.actor` est le compte qui a poussé ; `github.ref` la
+branche. `secrets.GITHUB_TOKEN` est un jeton créé pour cette exécution et
+détruit après ; il a les droits listés dans `permissions`, ici publier un
+paquet. Aucun mot de passe n'est écrit dans le dépôt.
+
+**`docker login`.** Se connecter au registre, comme on se connecte à
+GitHub avant de `push`. Le mot de passe arrive par `--password-stdin`
+(le `echo` d'avant le `|`) plutôt qu'en argument, où il resterait dans
+l'historique. Un registre, c'est le troisième des [trois concepts du chapitre
+Docker](/notes_de_cours/docker/conteneurs#image-conteneur-registre) ;
+`ghcr.io` est celui de GitHub.
+
+**Deux variables bash.** Le `|` après `run:` permet d'écrire plusieurs
+lignes. `${GITHUB_REPOSITORY_OWNER,,}` est le compte propriétaire du dépôt
+en minuscules (`,,` met en minuscules ; ghcr.io refuse les majuscules
+dans un nom d'image). `${GITHUB_SHA::7}` garde les sept premiers
+caractères du commit.
+
+**`docker build`.** C'est [la commande du chapitre
+Docker](/notes_de_cours/docker/conteneurs#construire-une-image), avec deux
+différences :
+
+- **`-f server/Dockerfile`** : où est le `Dockerfile`. Le point final
+  reste le **contexte**, la racine du dépôt, parce que `package-lock.json`
+  et les *workspaces* y vivent et que le `Dockerfile` en a besoin
+  (ouvrez-le : ses premiers `COPY` partent de la racine). Sans `-f`,
+  Docker chercherait `Dockerfile` à la racine.
+- **Deux `-t`** : deux noms pour la même image. `ghcr.io/compte/quizm9-api`
+  est le nom complet, registre compris ; ce qui suit les deux-points est
+  le tag. Pourquoi deux, à la section [Les tags](#les-tags).
+
+**`docker push --all-tags`.** Envoie l'image au registre, avec tous ses
+tags. C'est l'inverse du `docker pull` que `FROM node:24-alpine` fait
+sans qu'on le voie.
+
+## Le registre
+
+Un **registre** est un dépôt d'images, comme Docker Hub d'où viennent
+`node:24-alpine` et `postgres:17`. GitHub en fournit un, **ghcr.io**.
+Il est rattaché à un **compte**, pas à un dépôt : le nom complet est
+`ghcr.io/compte/quizm9-api`, le dépôt n'y apparaît pas. Le travail `image`
+y pousse deux images, `quizm9-api` et `quizm9-client`. Elles apparaissent
+sous **Packages** sur la page du compte, à côté des paquets de vos autres
+projets.
+
+Un paquet publié depuis un compte personnel est **privé** au départ. Pour
+que le serveur puisse le tirer sans se connecter : page du paquet, *Package
+settings*, *Change visibility*, *Public*. Une fois par paquet.
+
+## Les tags
+
+Une image a un nom et un **tag**, séparés par deux-points ; sans tag,
+c'est `latest`. Le workflow en pose deux sur chaque image :
+
+- **`latest`** : réécrit à chaque `push` sur `main`. Pratique pour suivre,
+  dangereux pour une prod : `docker compose pull` ramène ce qu'il y a
+  maintenant, qui n'est peut-être pas ce qu'on a testé hier.
+- **`sha-a1b2c3d`** : les sept premiers caractères du commit. Ce tag ne
+  bougera jamais. On sait exactement quel code tourne, et on peut revenir
+  en arrière en changeant une ligne.
+
+`docker compose images` montre l'image et le tag de chaque conteneur qui
+tourne.
+
+## Sur le serveur : `pull`, pas `build`
+
+Sur le serveur, il n'y a pas de code source, pas de Node, pas de
+`Dockerfile` : seulement Docker et un `compose.yml` qui nomme des images.
+
+```yaml title="deploy/compose.yml"
+services:
+  api:
+    image: ghcr.io/${OWNER}/quizm9-api:${TAG:-latest}
+    ports:
+      - "3000:3000"
+    volumes:
+      - quizm9-data:/data
+
+  client:
+    image: ghcr.io/${OWNER}/quizm9-client:${TAG:-latest}
+    ports:
+      - "5173:5173"
+    environment:
+      API_URL: http://api:3000
+    depends_on:
+      - api
+
+volumes:
+  quizm9-data:
+```
+
+- **`${OWNER}` et `${TAG}`** sont des variables. Compose les lit dans un
+  fichier **`.env`** posé à côté du `compose.yml`, une ligne `NOM=valeur`
+  par variable. `${TAG:-latest}` veut dire « `latest` si `TAG` n'est pas
+  défini ». Le `.env` n'est pas dans le dépôt, il contient les valeurs
+  spécifiques à chaque environnement.
+- Le volume `quizm9-data` est monté sur `/data`, le dossier où le
+  `Dockerfile` a fixé `DB_PATH`. C'est le [volume du chapitre
+  Docker](/notes_de_cours/docker/conteneurs#un-conteneur-est-jetable-et-ses-fichiers-avec-lui) :
+  la base survit aux conteneurs.
+
+```bash
+docker compose pull      # télécharge les images demandées (le tag de .env)
+docker compose up -d     # remplace les conteneurs dont l'image a changé
+docker compose images    # quelle image, quel tag, tourne
+```
+
+`pull` prend la place de `up --build` : au lieu de construire, on
+télécharge. Mettre la prod à jour, c'est donc : changer `TAG` dans `.env`,
+`pull`, `up -d`. Le volume `quizm9-data` n'est pas touché : les parties
+survivent à la mise à jour, comme elles survivaient à `down` la semaine
+dernière.
+
+## Demandes de tirage
+
+La CI prend tout son sens avec les **demandes de tirage** (*pull
+requests*) : le travail se fait sur une branche, la demande de tirage
+propose de la fusionner dans `main`, la CI y affiche son verdict, un
+coéquipier relit, puis on fusionne. Rien n'entre dans `main`, donc rien ne
+devient une image, sans être passé par là.

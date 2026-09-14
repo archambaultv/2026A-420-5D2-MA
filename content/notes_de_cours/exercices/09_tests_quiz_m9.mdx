@@ -1,0 +1,124 @@
+---
+sidebar_position: 9
+sidebar_label: 8. Tester Quiz M9
+description: "Quiz M9, semaine 4 : les tests unitaires de calculateScore, les tests d'intégration de l'espace auteur, et le test qui échoue avant la correction"
+---
+
+# Exercice 8 : tester Quiz M9
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+L'objectif est de remplacer le harnais `npm run verifier` par des tests
+unitaires et d'intégration. Notes à garder ouvertes : [Tester avec
+node:test](/notes_de_cours/qualite/tests_node).
+
+## Étape 0 : partir du bon pied
+
+:::warning
+
+Les corrections des semaines passées ont été repliées dans les commits de
+semaine. Votre `main` a donc divergé de celui du cours et `git pull` va
+refuser de fusionner. Recalez-la avant de commencer.
+
+**1. Recaler `main` sur celui du cours.** Le repère `ancien-main` garde
+l'ancien historique, dont vos branches ont besoin à l'étape 2 :
+
+```bash
+git fetch prof
+git checkout main
+git branch ancien-main
+git reset --hard prof/main
+git push --force-with-lease origin main
+```
+
+**2. Rebaser vos branches.** Pour chacune de vos branches (`sem-04`,
+`ma-branche`, ...) :
+
+```bash
+git rebase --onto main ancien-main ma-branche
+git push --force-with-lease origin ma-branche
+```
+
+Une fois toutes vos branches rebasées, le repère ne sert plus :
+
+```bash
+git branch -D ancien-main
+```
+
+:::
+
+Une fois votre dépôt recaler, lancer les tests unitaires et d'intégration :
+
+```bash
+npm test
+```
+
+Le rapport doit finir par `pass 7`, `fail 0`, `todo 9`. Les `todo` sont
+votre travail.
+
+## Jalon 1 : les cas limites de `calculateScore`
+
+- **Fichier** : `server/test/scoring.test.js`
+
+Les cinq premiers tests sont ceux du harnais, réécrits. Les cinq `test.todo`
+nomment des cas limites ; remplacez chacun par un vrai test.
+
+**Vérifier.** `npm test` : `todo 4`, aucun `fail`. Cassez volontairement
+`scoring.js` (un `4` à la place du `5`) : combien de tests deviennent
+rouges ? Remettez le `5`.
+
+## Jalon 2 : l'espace auteur, en HTTP
+
+- **Fichier** : `server/test/quizzes.test.js`
+
+Le premier test est fourni ; lisez `helpers.js` pour voir d'où vient
+`api`. Trois `test.todo` : une question sans bonne réponse est refusée,
+une question avec deux bonnes réponses est refusée, une question valide
+apparaît dans `GET /api/quizzes/:id`.
+
+**Vérifier.** `npm test` : `todo 1`. Les tests ne touchent pas votre
+`quizm9.db` : `npm run dev` peut tourner en même temps.
+
+## Jalon 3 : d'abord le test qui échoue
+
+- **Fichiers** : `quizzes.test.js`, puis `server/src/app.js`
+
+Le bogue : créer un questionnaire, ne pas lui ajouter de question, et lancer
+une partie dessus. Une fois lancée, la partie se termine immédiatement.
+
+ Écrivez le test : `POST /api/games` sur ce
+questionnaire doit répondre `400`. Lancez-le : il **doit échouer** (l'API
+répond `201`). Ensuite seulement, corrigez la route dans `app.js`, et
+relancez.
+
+**Vérifier.** `npm test` : `pass 16`, `fail 0`, `todo 0`. Dans le
+navigateur, créer une partie sur un questionnaire vide affiche le message
+d'erreur sous le bouton.
+
+## Jalon 4 : pour les rapides
+
+- **Fichier** : `server/test/games.test.js` (à créer)
+
+La salle de jeu se protège déjà : rejoindre deux fois la même partie avec le
+même pseudonyme répond `400`, et rejoindre une partie commencée aussi. Rien à
+corriger, donc : écrivez les tests qui le prouvent. Ils doivent passer du
+premier coup ; s'ils échouent, c'est le test qui est faux.
+
+Le squelette est celui de `quizzes.test.js` : `startServer` depuis
+`helpers.js`, puis créer un questionnaire, lui ajouter une question, créer la
+partie. Pour commencer la partie : `POST /api/games/:code/next`.
+
+## En panne ?
+
+- `EADDRINUSE` : un test a appelé `app.listen(3000)` au lieu de passer
+  par `startServer`, ou `server.js` a été importé au lieu de `app.js`.
+- Les tests d'intégration voient les questionnaires de votre base :
+  `DB_PATH` est fixé après l'import de `app.js`. L'ordre compte.
+- Un test passe seul et échoue avec les autres : il dépend de ce qu'un
+  autre test a écrit dans la base. Chaque test crée ce dont il a besoin.
+- `assert.equal(data.error, …)` échoue avec `undefined` : `data` est
+  `null`, la réponse n'était pas du JSON. Affichez `status` d'abord.

@@ -1,0 +1,73 @@
+---
+sidebar_position: 6
+sidebar_label: Entretien individuel et critères
+description: "Projet 1 : les trois objectifs évalués, leur pondération, et la note individuelle"
+---
+
+# L'entretien individuel et les critères
+
+## L'entretien
+
+L'entretien est **individuel** et dure **20 minutes**. Chaque personne réserve
+sa plage avec le lien que je vous enverrai.
+
+L'entretien consiste en une série de questions pour valider les objectifs
+d'évaluation. Des exemples de questions sont fournis ci-dessous.
+
+L'entretien est enregistré (audio seulement) pour permettre une demande de
+recorrection.
+
+Le barème est celui de la page [Évaluation et notation](/evaluations/notation).
+
+## 1. Le jeu fonctionne (70 %)
+
+Les [six récits](/evaluations/projet_1/recits), de bout en bout, dans le
+navigateur. De plus, j'évalue ici votre compréhension de l'application.
+
+Exemples de questions :
+
+- Montrez-moi et expliquez-moi le code qui permet de créer une partie privée
+  et comment la rejoindre avec un code.
+- Comment le code gère-t-il une requête de coup illégal, hors tour ou dans une
+  partie terminée ?
+- Comment est calculé le classement Elo ?
+- Justifiez votre architecture (ex : séparation client/serveur, API REST,
+  rendu côté serveur) et vos choix de bibliothèques (ex : `chess.js`).
+- Quelle est la partie du code ou les fonctionnalités dont vous étiez
+  responsable ?
+- Que se passe-t-il si le serveur est redémarré pendant que des joueurs sont en
+  train de jouer ?
+- Quelles routes sont rendues côté serveur et pourquoi ? Quelles routes sont
+  rendues côté client et pourquoi ?
+
+
+## 2. Tests et intégration continue (15 %)
+
+Le dépôt refuse une régression et la chaîne d'intégration continue est en place.
+
+Exemples de questions :
+
+- Montrez-moi et expliquez-moi le code des tests unitaires et d'intégration.
+- Quelle partie du code n'est pas testée et pourquoi ?
+- Montrez-moi et expliquez-moi le code de la chaîne d'intégration continue.
+- Quelle base de données est utilisée pour les tests d'intégration et
+  pourquoi ?
+- Si on voulait aussi tester les autres branches que `main`, comment
+  modifieriez-vous la chaîne d'intégration continue ?
+
+
+## 3. Livraison (15 %)
+
+L'application se déploie sans le code source à l'aide de `docker compose` sur
+une machine où il n'y a que Docker. Les secrets sont dans l'environnement, pas
+dans le dépôt.
+
+Exemples de questions :
+
+- Montrez-moi et expliquez-moi le code de `deploy/compose.yml`.
+- Pourquoi Docker et non pas une machine virtuelle ou un serveur physique ?
+- Où est le tag de l'image que vous m'avez remis, et pourquoi pas `latest` ?
+- Où vivent les parties une fois l'application déployée, et que reste-t-il
+  après un `docker compose down` ?
+- Comment sont gérés les secrets (ex : identifiant et secret de l'application
+  GitHub OAuth, clé de session) ?

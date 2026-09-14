@@ -1,5 +1,5 @@
 {
-  "label": "node:sqlite",
+  "label": "Sqlite",
   "position": 2,
-  "collapsed": false
+  "collapsed": true
 }

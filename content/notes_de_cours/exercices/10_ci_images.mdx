@@ -1,0 +1,228 @@
+---
+sidebar_position: 10
+sidebar_label: 9. Intégration continue et livraison
+description: "Quiz M9, semaine 4 : GitHub Actions exécute les tests à chaque push, publie les images dans ghcr.io, et on les tire dans un dossier sans code source ; latest contre un tag épinglé"
+---
+
+# Exercice 9 : intégration continue et livraison
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre. Tout se fait sur
+votre poste. Le jalon 3 demande **Docker Desktop** : installez-le avant d'y
+arriver (docker.com, *Download Docker Desktop*), démarrez-le, et vérifiez
+dans un terminal que `docker run --rm hello-world` répond.
+
+:::
+
+Le dépôt contient depuis cette semaine `.github/workflows/ci.yml` et
+`deploy/compose.yml`. Notes à garder ouvertes : [Intégration continue et
+registre](/notes_de_cours/qualite/integration_continue). Cet exercice ne
+dépend pas de l'exercice 8 : les tests fournis suffisent à la CI.
+
+## Jalon 0 : recaler votre dépôt
+
+:::warning
+
+**Vous n'avez pas besoin de refaire cette étape si vous l'avez déjà faite à l'[exercice 8](/notes_de_cours/exercices/tests_quiz_m9).**
+
+Les corrections des semaines passées ont été repliées dans les commits de
+semaine. Votre `main` a donc divergé de celui du cours et `git pull` va
+refuser de fusionner. Recalez-la avant de commencer.
+
+**1. Recaler `main` sur celui du cours.** Le repère `ancien-main` garde
+l'ancien historique, dont vos branches ont besoin à l'étape 2 :
+
+```bash
+git fetch prof
+git checkout main
+git branch ancien-main
+git reset --hard prof/main
+git push --force-with-lease origin main
+```
+
+**2. Rebaser vos branches.** Pour chacune de vos branches (`sem-04`,
+`ma-branche`, ...) :
+
+```bash
+git rebase --onto main ancien-main ma-branche
+git push --force-with-lease origin ma-branche
+```
+
+Une fois toutes vos branches rebasées, le repère ne sert plus :
+
+```bash
+git branch -D ancien-main
+```
+
+:::
+
+La CI tourne sur **votre** dépôt (`origin`), pas sur celui du cours
+(`prof`) : `.github/workflows/ci.yml` vous arrive par `main`, et c'est
+votre push vers `origin` qui le déclenche.
+
+Votre dépôt doit être **public** : au jalon 3, vous irez y chercher
+`compose.yml` sans vous authentifier. Au besoin, *Settings*, *Change
+visibility*.
+
+## Jalon 1 : la première image
+
+Le jalon 0 a mis à jour votre `main` sur votre dépôt. L'intégration continue
+est déclenchée par un `push` sur `main`.
+
+Quand `image` est vert, la page de votre compte a un onglet **Packages**
+avec `quizm9-api` et `quizm9-client`. Pour chacun : *Package settings*,
+*Change visibility*, *Public*.
+
+**Vérifier.** Sur votre poste, `docker pull ghcr.io/VOTRE-COMPTE/quizm9-api:latest`
+sans être connecté au registre. Sur la page du paquet, deux tags :
+`latest` et `sha-…`, le même commit que le haut de `main`.
+
+## Jalon 2 : la régression refusée
+
+Sur une branche, cassez le pointage et proposez-le quand même.
+
+```bash
+git checkout -b regression
+# dans server/src/scoring.js : return 4 + speedBonus + firstBonus;
+git commit -am "Ajuste le pointage"
+git push -u origin regression
+```
+
+Sur GitHub, ouvrez une **demande de tirage** de `regression` vers `main`.
+Attendez le verdict. Rouge : ouvrez le journal de `test` et trouvez la
+ligne du test qui a échoué. `image` n'a pas tourné.
+
+Corrigez (`5`), `commit`, `push` : la demande de tirage se met à jour,
+vert. Fusionnez (*Merge pull request*). Onglet Actions : le `push` sur
+`main` produit une nouvelle image, avec un nouveau tag `sha-…`.
+
+**Vérifier.** La page du paquet `quizm9-api` a deux tags `sha-…` et
+`latest` pointe sur le plus récent.
+
+## Jalon 3 : déployer sans le code source
+
+Votre poste joue le rôle du serveur : un dossier **hors du dépôt**, où il
+n'y a ni code source ni `node_modules`, seulement les images du registre.
+Arrêtez d'abord vos serveurs de développement, qui tiennent les ports 3000
+et 5173.
+
+```bash
+cd ~                # ailleurs que dans le dépôt
+mkdir quizm9-prod
+cd quizm9-prod
+curl -O https://raw.githubusercontent.com/VOTRE-COMPTE/VOTRE-DEPOT/main/deploy/compose.yml
+```
+
+Dans PowerShell, tapez `curl.exe` et non `curl` ; sinon, ouvrez l'URL dans
+le navigateur et enregistrez le fichier dans le dossier.
+
+Créez à côté un fichier `.env`, deux lignes, le compte en **minuscules** :
+
+```bash title=".env"
+OWNER=votre-compte
+TAG=latest
+```
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose ps
+```
+
+**Vérifier.** `http://localhost:5173` : Quiz M9. Jouez une partie à deux
+navigateurs. `docker compose images` : les deux images viennent de
+`ghcr.io`, tag `latest`. Le dossier, lui, ne contient que `compose.yml` et
+`.env`.
+
+## Jalon 4 : `latest` bouge, `sha` ne bouge pas
+
+Vous travaillez dans deux dossiers : le **dépôt**, où vous poussez du code,
+et **`quizm9-prod`**, où tourne la prod. Un terminal dans chacun.
+
+1. **Dans le dépôt**, sur `main` : changez le titre de la page d'accueil
+   (`client/app/routes/home.jsx`), puis
+
+   ```bash
+   git commit -am "Change le titre"
+   git push
+   ```
+
+   Attendez le vert dans l'onglet Actions.
+
+2. **Dans `quizm9-prod`** :
+
+   ```bash
+   docker compose pull
+   docker compose up -d
+   ```
+
+   Rechargez `http://localhost:5173` : le nouveau titre est là. `TAG=latest`
+   suit `main`, sans que vous touchiez à `.env`.
+
+3. **Épinglez la version qui tourne.** Sur GitHub, page de votre compte,
+   onglet **Packages**, `quizm9-client` : la version du haut porte deux
+   tags, `latest` et `sha-…`. C'est celle qui tourne. Copiez le `sha-…`
+   dans `.env`, à la place de `latest`. Puis, **dans `quizm9-prod`** :
+
+   ```bash
+   docker compose pull
+   docker compose up -d
+   ```
+
+   Rien ne change : c'est la même image qu'avant, demandée par son nom
+   exact.
+
+4. **Dans le dépôt** : changez le titre une seconde fois, `commit`, `push`,
+   attendez le vert. La CI publie une nouvelle image et déplace `latest`
+   dessus.
+
+5. **Dans `quizm9-prod`** : `docker compose pull`, `docker compose up -d`,
+   rechargez la page. **Le titre n'a pas bougé.** `TAG` est épinglé : la
+   prod ne change plus tant que vous ne changez pas cette ligne.
+
+6. **Mettez la prod à jour.** Retournez sur la page du paquet : la
+   version du haut porte un **nouveau** `sha-…`, celui du second push.
+   Mettez ce tag dans `.env`, puis `pull` et `up -d` : le second titre
+   apparaît enfin.
+
+**Vérifier.** `docker compose images` montre un tag `sha-…`, pas `latest`,
+et vous savez dire quel commit tourne.
+
+## Nettoyer
+
+Quand vous avez fini, dans `quizm9-prod` :
+
+```bash
+docker compose down     # arrête et détruit les conteneurs, garde le volume
+```
+
+Les ports 3000 et 5173 sont rendus à vos serveurs de développement. Les
+parties jouées, elles, restent dans le volume : `docker compose up -d` les
+retrouve.
+
+Pour tout effacer, volume compris :
+
+```bash
+docker compose down -v      # conteneurs ET volume
+docker volume ls            # le volume quizm9-prod_quizm9-data n'y est plus
+```
+
+Le prochain `docker compose up -d` repart d'une base vide.
+
+## En panne ?
+
+- `image` est *skipped* : normal sur une branche autre que `main`.
+- `cannot connect to the Docker daemon` : Docker Desktop n'est pas démarré.
+- `denied` au `docker pull` : le paquet est encore privé (jalon 1), ou
+  `OWNER` a une majuscule.
+- `docker compose pull` dit *manifest unknown* : le tag dans `.env`
+  n'existe pas ; comparez avec la page du paquet.
+- `up -d` ne change rien après un `pull` : l'image tirée est la même
+  (le tag est épinglé, ou `image` n'a pas encore fini). `docker compose
+  images` et l'onglet Actions.
+- `port is already allocated` sur 5173 ou 3000 : votre serveur de
+  développement tourne encore, ou un conteneur d'un essai précédent.
+  Arrêtez le serveur, puis `docker ps` et `docker rm -f <nom>`.
+- La CI est rouge sur `npm ci` : `package-lock.json` n'est pas à jour avec
+  `package.json`. `npm install` dans le dépôt, puis commit du lock.

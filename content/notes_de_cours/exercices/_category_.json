@@ -1,7 +1,7 @@
 {
   "label": "Exercices",
   "position": 99,
-  "collapsed": false,
+  "collapsed": true,
   "link": {
     "type": "generated-index",
     "slug": "/exercices",

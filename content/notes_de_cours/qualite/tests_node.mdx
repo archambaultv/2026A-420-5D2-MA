@@ -1,0 +1,115 @@
+---
+sidebar_position: 1
+sidebar_label: Tester avec node:test
+description: "Le lanceur de tests de Node : tests unitaires d'une fonction pure, tests d'intégration d'une API démarrée sur une base temporaire, et le test qui échoue avant la correction"
+---
+
+# Tester avec `node:test`
+
+Depuis trois semaines, `npm run verifier` dit si le travail de la semaine
+est fait. Ouvrez-le : `server/verifier/verifier.mjs`, c'est une liste de
+`check(nom, condition)` et un compteur. Rien de magique. Cette semaine,
+vous écrivez les vôtres, avec le lanceur de tests fourni par Node.
+
+## Un test
+
+```js title="server/test/scoring.test.js"
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { calculateScore } from '../src/scoring.js';
+
+test('mauvaise réponse = 0', () => {
+  const points = calculateScore({
+    isCorrect: false,
+    responseTimeMs: 0,
+    questionDurationMs: 20000,
+    isFirstCorrectAnswer: false,
+  });
+  assert.equal(points, 0);
+});
+```
+
+- **`test(nom, fn)`** déclare un test. Le nom est une phrase qui dit ce qui
+  est attendu, pas ce que fait le code : « mauvaise réponse = 0 », pas
+  « teste calculateScore ».
+- **`assert.equal(obtenu, attendu)`** compare ; si c'est différent, le test
+  échoue avec les deux valeurs affichées. `assert.ok(condition)`,
+  `assert.match(chaîne, /regex/)` et `assert.deepEqual` pour les objets
+  complètent l'essentiel.
+- **`node:assert/strict`** : la version stricte, `===` et non `==`.
+
+```bash
+npm test                          # tous les tests, depuis la racine
+cd server && node --test          # la même chose, dans le workspace
+node --test test/scoring.test.js  # un seul fichier
+node --test --watch               # relance à chaque sauvegarde
+```
+
+`node --test` cherche les fichiers `*.test.js` et les exécute chacun dans
+un processus séparé. Le rapport liste chaque test avec ✔ ou ✖, puis les
+totaux.
+
+:::info[Jest et Vitest]
+
+En entreprise, vous croiserez également
+[Jest](https://jestjs.io/) et [Vitest](https://vitest.dev/). Même idée, ce que
+vous apprenez ici se transfère tel quel. 
+
+:::
+
+## Unitaire ou intégration
+
+`calculateScore` est une fonction **pure** : tout ce dont elle a besoin
+arrive en paramètre, elle ne lit ni l'horloge, ni la base. Son test est
+**unitaire** : on l'appelle et on regarde le résultat. Pas de serveur, pas de
+fichier, un millième de seconde.
+
+Une route de l'API, elle, ne se teste pas seule : il faut Express, le
+`repository/`, une base. Son test est un test d'**intégration** : il démarre
+l'application et lui parle en HTTP, comme le ferait le client.
+
+```js title="server/test/quizzes.test.js"
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { startServer } from './helpers.js';
+
+let api;
+before(async () => { api = await startServer(); });
+after(() => api.close());
+
+test('un titre vide est refusé (400)', async () => {
+  const { status, data } = await api.request('POST', '/api/quizzes', { title: '   ' });
+  assert.equal(status, 400);
+  assert.equal(typeof data.error, 'string');
+});
+```
+
+`before` et `after` s'exécutent une fois par fichier, avant le premier test
+et après le dernier. Un test asynchrone est une fonction `async` : le
+lanceur attend sa promesse.
+
+## Ce qu'il a fallu changer pour que ce soit possible
+
+Deux choses, dans `server/src/`, faites pour vous cette semaine.
+
+**`app.js` et `server.js` sont séparés.** Jusqu'ici `server.js` construisait
+les routes et appelait `app.listen(3000)` à la fin. Un test qui l'importait
+aurait démarré un serveur sur le port 3000, en conflit avec `npm run dev`.
+Maintenant `app.js` exporte `app` sans l'écouter, et `server.js` ne fait que
+`app.listen`. Le test importe `app` et l'écoute sur le port `0`, c'est à
+dire n'importe quel port libre.
+
+**Une base par fichier de test.** `db.js` lit `DB_PATH` au chargement
+(c'est la variable qu'on a fixée pour le conteneur). `helpers.js` la pointe
+vers un dossier temporaire **avant** d'importer `app.js` ; la base est
+créée vide, `seed.sql` la remplit. Chaque fichier de test tourne dans son
+processus, donc chaque fichier a sa base : deux fichiers en parallèle ne se
+voient pas, et votre `quizm9.db` n'est jamais touchée.
+
+## D'abord le test qui échoue
+
+Quand un bogue est trouvé, la règle : écrire le test qui le reproduit,
+le voir échouer, corriger, le voir passer. Le test rouge prouve qu'il
+teste bien le bogue ; le test vert prouve la correction ; et le test
+reste, pour que le bogue ne revienne pas sans qu'on le sache. La
+semaine 4 en a un : une partie créée sur un questionnaire sans question.
