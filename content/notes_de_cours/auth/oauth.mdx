@@ -1,0 +1,175 @@
+---
+sidebar_position: 1
+sidebar_label: OAuth 2
+description: "Déléguer l'authentification à un fournisseur externe : pourquoi pas un mot de passe, les quatre rôles d'OAuth 2, le flux par code d'autorisation, le rôle du state contre le lien piégé, et « Se connecter avec GitHub » dans Quiz M9"
+---
+
+# OAuth 2
+
+Un questionnaire n'appartient à personne : n'importe qui peut ouvrir
+`/quizzes` et modifier n'importe quoi. Pour qu'un questionnaire ait un
+auteur, il faut savoir **qui** est devant le navigateur. Cette semaine, on ne
+gère pas de mots de passe : on demande à GitHub.
+
+## Pourquoi pas un mot de passe
+
+Gérer des mots de passe, c'est un métier : hachage avec sel (4D2 vous a fait
+installer `bcryptjs`), politique de longueur, réinitialisation par courriel,
+double authentification, fuite de la base. Un site qui n'a pas besoin de
+tout ça a intérêt à le déléguer à quelqu'un qui le fait déjà. C'est ce que
+« Se connecter avec GitHub » (ou Google, ou Microsoft) veut dire.
+
+## OAuth 2 : quatre rôles
+
+OAuth 2 est un protocole de **délégation** : un utilisateur autorise une
+application à accéder à des ressources chez un fournisseur, sans lui donner
+son mot de passe.
+
+| Rôle | Dans Quiz M9 |
+|---|---|
+| **Propriétaire de la ressource** | Vous, avec votre compte GitHub |
+| **Client** | Quiz M9, l'application qui demande l'accès |
+| **Serveur d'autorisation** | `github.com`, qui vous authentifie et vous demande votre accord |
+| **Serveur de ressources** | `api.github.com`, qui livre le profil contre un jeton |
+
+Le client n'est pas n'importe qui : il faut l'**enregistrer d'avance** chez
+le fournisseur. GitHub sait donc déjà que Quiz M9 existe.
+
+## Le flux par code d'autorisation
+
+```
+navigateur                      Quiz M9 (API)                  GitHub
+    │  clic « Se connecter »          │                            │
+    │ ───────────────────────────────►│                            │
+    │  302 github.com/login/oauth/authorize?client_id&redirect_uri&state
+    │      + Set-Cookie : le state, pour le reconnaître au retour  │
+    │ ◄───────────────────────────────│                            │
+    │  (1) suit la redirection ─────────────────────────────────► │
+    │                                 │       mot de passe, accord  │
+    │  302 localhost:5173/api/auth/callback?code=…&state=…        │
+    │ ◄──────────────────────────────────────────────────────────  │
+    │  (2) suit la redirection ──────►│                            │
+    │                                 │ (3a) POST …/access_token   │
+    │                                 │      code + client_secret  │
+    │                                 │ ─────────────────────────► │
+    │                                 │ ◄──── access_token ──────  │
+    │                                 │ (3b) GET api.github.com/user
+    │                                 │      Authorization: Bearer │
+    │                                 │ ─────────────────────────► │
+    │                                 │ ◄──── { id, login, … } ─── │
+    │  (4) 302 /quizzes + Set-Cookie  │                            │
+    │ ◄───────────────────────────────│                            │
+```
+
+1. **Le départ.** L'API de Quiz M9 renvoie le navigateur chez GitHub avec
+   trois paramètres **dans l'URL** : qui demande (`client_id`), où revenir
+   (`redirect_uri`, que GitHub refuse si ce n'est pas l'adresse enregistrée)
+   et un nombre aléatoire, le **`state`**. Du `state`, elle garde aussi une
+   copie **dans un cookie** posé sur ce navigateur.
+2. **Le retour.** L'utilisateur s'est authentifié chez GitHub, qui redirige
+   le navigateur vers l'URL de rappel avec, encore **dans l'URL**, un
+   **code** à usage unique et le `state` tel quel. L'API compare le
+   `state` de l'URL à celui de son cookie et refuse s'ils diffèrent.
+3. **L'échange.** Le code seul ne vaut rien. L'API l'échange contre un
+   **jeton d'accès**, de serveur à serveur, en présentant son
+   `client_secret`. Le navigateur ne voit jamais le jeton ; le secret ne
+   quitte jamais le serveur. Puis elle lit le profil avec le jeton.
+4. **Notre session.** L'API crée ou retrouve le compte (`account`,
+   identifié par `github_id`), pose son cookie de session, et le jeton
+   GitHub est oublié : on n'en a plus besoin.
+
+`code` et `state` voyagent donc dans les URL, jamais dans un cookie. Le
+seul cookie de l'aller-retour est celui de l'étape 1, où l'API garde sa
+copie du `state`.
+
+### Le lien piégé
+
+À quoi sert la comparaison de l'étape 2 ? À bloquer une attaque qui est
+l'envers de l'intuition habituelle : l'attaquante ne cherche pas à entrer
+dans le compte de sa victime, elle fait entrer sa victime dans **le sien**.
+
+Le scénario qui suit se déroule dans un Quiz M9 **sans `state`** : les URL
+n'en portent pas, et l'API ne compare rien. On le remet à la fin pour voir
+ce qu'il change.
+
+Alice veut piéger Bob.
+
+1. Alice ouvre Quiz M9 et clique « Se connecter avec GitHub ».
+2. Chez GitHub, elle s'authentifie normalement, avec **son** compte à elle,
+   et donne son accord.
+3. GitHub renvoie son navigateur vers
+   `https://quizm9.example/api/auth/callback?code=ABC123`.
+4. Elle n'y va pas. Elle coupe la connexion, ou elle lit simplement l'URL
+   dans la barre d'adresse. Le `code` n'a jamais été utilisé : il reste
+   valide quelques minutes.
+5. Elle envoie ce lien à Bob. Par courriel, ou caché dans une de ses pages
+   avec un `<img src="https://quizm9.example/api/auth/callback?code=ABC123">`,
+   auquel cas Bob n'a rien à cliquer du tout.
+6. Le navigateur de Bob atteint l'URL de rappel. Sans `state`, l'API n'a
+   aucun moyen de savoir que ce code ne vient pas d'un flux qu'elle a démarré
+   pour ce navigateur. Elle fait son travail : elle échange le code avec son
+   `client_secret`, obtient un jeton, appelle `GET /user`, et lit le profil
+   d'**Alice**.
+7. L'API pose sur le navigateur de **Bob** un cookie de session pour le
+   compte d'**Alice**.
+
+Bob est maintenant connecté sous une identité qui n'est pas la sienne, et
+rien ne cloche à l'écran : il s'attendait à être connecté, il l'est. Tout ce
+qu'il fait ensuite se range dans le compte d'Alice, qui n'a plus qu'à se
+connecter chez elle pour le lire.
+
+Le `state` ferme la porte parce qu'il oblige deux choses à concorder, et
+Alice n'en contrôle qu'une seule :
+
+| | Qui le contrôle |
+|---|---|
+| Le `state` dans l'URL de rappel | Alice, puisqu'elle fabrique le lien |
+| Le `state` dans le cookie | l'API seule, à l'étape 1, sur le navigateur qui a cliqué |
+
+Le cookie contenant le `state` d'Alice a été posé dans **son** navigateur à
+elle. Son lien piégé transporte ce même `state` dans l'URL, mais le
+navigateur de Bob n'a pas le cookie qui va avec : soit aucun, soit un autre,
+venant de son propre flux. Dans les deux cas, la comparaison échoue. Alice
+ne peut pas contourner cela : elle ne peut pas écrire un cookie du domaine de
+Quiz M9 dans le navigateur de Bob, c'est précisément ce que la politique
+d'origine des cookies interdit.
+
+D'où les deux exigences sur le `state` : aléatoire et imprévisible (sinon on
+le devine et le cookie ne sert plus à rien), et à usage unique (on efface le
+cookie après la comparaison).
+
+
+### Pourquoi un code, puis un jeton ?
+
+Parce que l'étape 2 passe par le navigateur, dans une URL, visible dans
+l'historique et les journaux. Le code y est inoffensif : il expire en
+quelques minutes, ne sert qu'une fois, et ne s'échange qu'avec le secret.
+
+
+## Dans Quiz M9
+
+**Le code.** Tout le flux tient dans `server/src/auth.js` :
+`GET /api/auth/github` pour l'étape 1, `GET /api/auth/callback` pour les
+étapes 2 à 4, plus `POST /api/auth/logout` et `GET /api/me`. Le `client_id`
+et le `client_secret` viennent de `server/.env`, jamais du dépôt.
+
+**L'URL de rappel passe par le client.** L'application est enregistrée chez
+GitHub avec `http://localhost:5173/api/auth/callback` : le port du
+**client**, pas celui de l'API. GitHub y redirige un navigateur, et le
+navigateur ne connaît que 5173 ; c'est le relais `/api` qui porte ensuite la
+requête jusqu'à l'API.
+
+**Le bouton est un `<a href>`, pas un `<Link>`.** On quitte l'application
+pour aller chez GitHub, et on en revient par une redirection. React Router
+n'a rien à faire là-dedans.
+
+**Aucun scope n'est demandé.** Le profil public suffit : on veut une
+identité, pas l'accès aux dépôts. Demandez le minimum, toujours.
+
+**Le `state` est gardé dans le cookie de session**, le même que celui qui
+retiendra ensuite qui est connecté. Il n'y a encore personne à retenir à
+l'étape 1, mais le mécanisme est déjà en place.
+
+Le profil est en main, GitHub a fini son travail. Maintenant quoi faire avec cet
+identité ? C'est le sujet de la page suivante :
+[La session](session).

@@ -1,0 +1,260 @@
+---
+sidebar_position: 1
+sidebar_label: PostgreSQL en conteneur
+description: "Un serveur de base de données à la place d'un fichier : PostgreSQL démarré par Docker Compose, psql, le module pg et le repository devenu asynchrone, les tests et la CI qui suivent"
+---
+
+# PostgreSQL en conteneur
+
+Depuis la semaine 2, la base de Quiz M9 est un **fichier**, `quizm9.db`, ouvert
+par le processus Node. Ça suffit à une application qui tourne dans un seul
+processus, sur une seule machine. Mais s'il y a plusieurs processus, ou
+plusieurs machines, ils ne peuvent pas se partager un fichier proprement. Ils
+se partagent un **serveur** de base de données, auquel chacun se connecte par
+le réseau.
+
+PostgreSQL est ce serveur. Le SQL reste du SQL : le schéma, les jointures,
+les transactions, tout ce que vous avez écrit dans `repository/` reste
+valable. Ce qui change, c'est la façon de lui parler.
+
+## Installer PostgreSQL : sur la machine vs dans un conteneur
+
+Installer PostgreSQL directement sur son poste c'est un installateur, un
+service qui démarre avec la machine, un utilisateur `postgres` avec un mot de
+passe, un port 5432 à surveiller. De plus, vos coéquipiers n'ont pas forcément
+la même version. Dans un conteneur, c'est un service de plus dans
+`compose.yml`.
+
+| | Sur la machine | En conteneur |
+|---|---|---|
+| Installer | Installateur, selon le système | `docker compose up -d postgres` |
+| Version | Celle de l'installateur | `image: postgres:17`, la même pour tous |
+| Démarrer, arrêter | Un service du système | `up -d`, `down` |
+| Les données | Un dossier du système | Un volume nommé |
+| Repartir à neuf | Désinstaller, nettoyer | `down -v` |
+| Plusieurs projets | Une seule instance, des bases à gérer | Une instance par projet, isolée |
+
+C'est la [leçon de la semaine 3](/notes_de_cours/docker/conteneurs) appliquée
+à un logiciel qu'on n'a pas écrit : l'image contient tout, le conteneur est
+jetable, les données vivent dans un volume.
+
+```yaml title="compose.yml (extrait)"
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: quizm9          # créés au PREMIER démarrage,
+      POSTGRES_PASSWORD: quizm9      # quand le volume est vide
+      POSTGRES_DB: quizm9
+    ports:
+      - "127.0.0.1:5432:5432"        # joignable de ce poste seulement
+    volumes:
+      - quizm9-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quizm9"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+```
+
+- **`environment`** : l'image lit ces trois variables au premier démarrage
+  pour créer l'utilisateur et la base. Après, elles ne servent plus : le
+  volume contient déjà tout. Changer le mot de passe ici ne change pas celui
+  d'une base existante. Un mot de passe en clair dans un fichier commité ?
+  Oui, parce que c'est la base de développement : aucune donnée réelle, et
+  `down -v` la recrée à volonté. Le vrai mot de passe, celui de la
+  production, est dans un `.env` jamais commité (voir plus bas).
+- **`ports`** : en développement, l'API tourne sur votre poste, hors
+  conteneur, et joint la base sur `localhost:5432`. Le préfixe `127.0.0.1:`
+  compte : sans lui, Docker écoute sur toutes les interfaces et n'importe qui
+  sur le réseau du collège peut ouvrir votre base avec `quizm9`/`quizm9`.
+  Dans `deploy/compose.yml`, cette ligne n'existe pas : seule l'API, sur le
+  réseau privé, parle à la base.
+- **`healthcheck`** : un conteneur démarré n'est pas un serveur prêt.
+  PostgreSQL met une ou deux secondes à accepter des connexions ;
+  `pg_isready` le demande. Le service `api` attend ce feu vert
+  (`depends_on` avec `condition: service_healthy`) avant de démarrer.
+
+En développement, on ne démarre que la base :
+
+```bash
+docker compose up -d postgres    # -d : en arrière-plan, le terminal reste libre
+npm run dev                      # l'API la joint sur localhost:5432
+```
+
+`docker compose down` arrête le conteneur et garde le volume : les
+questionnaires sont encore là au prochain `up`. `docker compose down -v`
+détruit aussi le volume : base vide, `seed.sql` rechargé au prochain
+démarrage de l'API.
+
+## Regarder dans la base : `psql`
+
+Le client en ligne de commande de PostgreSQL est dans l'image. On l'exécute
+dans le conteneur :
+
+```bash
+docker compose exec postgres psql -U quizm9
+```
+
+```
+quizm9=# \dt                              -- les tables
+quizm9=# \d game                          -- les colonnes d'une table
+quizm9=# SELECT code, state FROM game;    -- du SQL, avec le point-virgule
+quizm9=# \q                               -- quitter
+```
+
+Les commandes qui commencent par `\` sont celles de `psql` ; le reste est du
+SQL, terminé par un point-virgule. Sous VS Code, l'extension *PostgreSQL* de
+Microsoft fait la même chose avec une interface, connectée à
+`localhost:5432`, utilisateur et mot de passe `quizm9`.
+
+## Le schéma, trois différences
+
+Ouvrez `server/data/schema.sql`. Les sept tables sont les mêmes ; trois
+détails ont changé de dialecte.
+
+- **`INTEGER PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY`** remplace
+  l'`INTEGER PRIMARY KEY` de SQLite, qui s'incrémentait tout seul. C'est le
+  même service, dit explicitement.
+- **`BOOLEAN`** existe. `is_correct` vaut `TRUE` ou `FALSE`, plus `0` ou
+  `1`, et le JavaScript reçoit un vrai booléen.
+- **`BIGINT`** pour les horodatages. `Date.now()` dépasse ce qu'un `INTEGER`
+  de 32 bits peut contenir ; SQLite ne faisait pas la différence, PostgreSQL
+  oui.
+
+Le `seed.sql` donne ses `id` à la main ; il finit donc par deux `setval`
+qui avancent les compteurs, sinon le prochain `INSERT` recevrait un `id`
+déjà pris.
+
+## `pg` : parler à un serveur depuis Node
+
+`node:sqlite` était **synchrone** : `db.prepare(sql).get(id)` retournait la
+ligne, tout de suite, parce que le fichier était là. Avec un serveur, la
+requête part sur le réseau et la réponse revient plus tard. Le module
+[`pg`](https://node-postgres.com/) est donc **asynchrone** : chaque requête
+retourne une promesse, et tout le code qui l'appelle apprend à `await`.
+
+```js title="server/src/repository/db.js (extrait)"
+import pg from 'pg';
+
+const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://quizm9:quizm9@localhost:5432/quizm9';
+export const pool = new pg.Pool({ connectionString: DATABASE_URL });
+```
+
+- **`DATABASE_URL`** : une adresse, comme une URL de site :
+  `postgres://utilisateur:motdepasse@hôte:port/base`. Sur votre poste,
+  l'hôte est `localhost` ; dans `compose.yml`, c'est `postgres`, le nom du
+  service.
+- **`??`** : la valeur écrite en dur ne sert que si la variable
+  d'environnement `DATABASE_URL` est absente. Elle vise le conteneur local,
+  sans données réelles, et ce n'est pas grave qu'elle soit sur GitHub. En
+  production, le mot de passe n'est jamais dans le code : l'hébergeur (ou la
+  base gérée) le génère, on le colle dans ses variables d'environnement et
+  le code le reçoit par `process.env`.
+- **`Pool`** : ouvrir une connexion coûte cher. Le pool en garde quelques-unes
+  ouvertes et en prête une à chaque requête. `pool.query(...)` emprunte,
+  exécute, rend.
+
+Une lecture, avant et après :
+
+```js
+// SQLite, semaine 2
+export function findGameByCode(code) {
+  return db.prepare('SELECT * FROM game WHERE code = ?').get(code);
+}
+
+// PostgreSQL, semaine 5
+export async function findGameByCode(code) {
+  const { rows } = await pool.query('SELECT * FROM game WHERE code = $1', [code]);
+  return rows[0];
+}
+```
+
+| | `node:sqlite` | `pg` |
+|---|---|---|
+| Paramètres | `?`, positionnels | `$1`, `$2`, numérotés |
+| Valeurs | Arguments de `.get(a, b)` | Un tableau, `[a, b]` |
+| Une ligne | `.get()` | `rows[0]` |
+| Des lignes | `.all()` | `rows` |
+| L'id créé | `.run().lastInsertRowid` | `INSERT … RETURNING id`, puis `rows[0].id` |
+| Lignes touchées | `.run().changes` | `rowCount` |
+| Attente | Aucune | `await`, la fonction devient `async` |
+
+Le SQL, lui, n'a pas bougé : c'est ce que la règle « tout le SQL dans
+`repository/` » achète. Ouvrez `git log -p -- server/src/app.js` : les
+routes ont gagné des `await`, rien d'autre.
+
+:::warning[L'`await` oublié]
+
+Une fonction `async` retourne toujours une promesse, et une promesse est
+toujours *truthy*. `if (!repository.getQuizWithQuestions(id))` sans `await`
+ne détecte jamais un questionnaire absent : la condition est fausse même
+quand la ligne n'existe pas.
+
+:::
+
+### La transaction, sur une seule connexion
+
+`BEGIN` et `COMMIT` doivent partir sur la **même** connexion, sinon ils
+n'encadrent rien. `withTransaction` emprunte donc un client au pool et le
+passe à la fonction, qui doit s'en servir pour chacune de ses requêtes :
+
+```js title="server/src/repository/quizzes.js (extrait)"
+export function addQuestion(quizId, question) {
+  return withTransaction(async (tx) => {
+    const { rows } = await tx.query('INSERT INTO question … RETURNING id', […]);
+    for (const choice of question.choices) {
+      await tx.query('INSERT INTO choice … VALUES ($1, $2, $3)', […]);
+    }
+    return rows[0].id;
+  });
+}
+```
+
+Dans `game.js`, `closeQuestion` fait la même chose avec trois fonctions du
+repository : elles reçoivent `tx` en dernier argument, et se rabattent sur le
+pool quand on ne leur passe rien.
+
+## Les tests et la CI suivent
+
+Un test d'intégration voulait une base **temporaire** : la semaine 4, un
+fichier dans un dossier temporaire. Un serveur ne se copie pas ; on lui
+demande une base neuve. `test/helpers.js` exécute `CREATE DATABASE
+quizm9_test_xxxx` sur le serveur de `DATABASE_URL`, pointe l'API dessus, et
+finit par `DROP DATABASE`. Chaque fichier de test a la sienne ; deux fichiers
+en parallèle ne se voient pas. Il faut donc un PostgreSQL qui tourne pour
+`npm test` : sans lui, `ECONNREFUSED 127.0.0.1:5432` dès le `before`.
+
+Sur GitHub Actions, la machine est vide. Le travail `test` déclare un
+**conteneur de service** :
+
+```yaml title=".github/workflows/ci.yml (extrait)"
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: quizm9
+          POSTGRES_PASSWORD: quizm9
+          POSTGRES_DB: quizm9
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quizm9"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+```
+
+C'est le service de `compose.yml`, écrit dans le dialecte de GitHub Actions :
+la même image, les mêmes variables, la même vérification de santé. Il est
+démarré avant les `steps` et joignable sur `localhost:5432`. Les tests de la
+semaine 4 tournent dessus sans une ligne de changement, et c'est eux qui
+disent que la migration n'a rien cassé.
+
+## En production : trois services
+
+`deploy/compose.yml` a maintenant trois services, et le `.env` posé à côté
+gagne `POSTGRES_PASSWORD`. Ce mot de passe est choisi une fois, au premier
+`up` : il crée l'utilisateur dans le volume, puis sert à l'API pour se
+connecter. Le volume `quizm9-pgdata` remplace `quizm9-data` : les parties
+survivent aux mises à jour de l'image, comme avant.

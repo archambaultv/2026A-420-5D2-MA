@@ -1,0 +1,20 @@
+---
+sidebar_position: 3
+sidebar_label: OpenID Connect
+description: "La couche identité posée sur OAuth 2 : le scope openid, l'id_token et pourquoi GitHub n'en fait pas"
+---
+
+# OpenID Connect
+
+[OAuth 2](oauth) dit comment obtenir un jeton pour **accéder** à des
+ressources. Il ne dit pas qui est l'utilisateur ; chaque fournisseur a sa
+route de profil, avec ses champs.
+
+**OpenID Connect** (OIDC) ajoute à OAuth 2 une réponse standard à cette
+question : avec le scope `openid`, le fournisseur renvoie en plus un
+**`id_token`**, un JWT signé qui contient l'identité (`sub`, l'identifiant
+stable ; `email`, `name`). Google, Microsoft, Apple parlent OIDC ; le client
+lit le même jeton chez chacun.
+
+GitHub, lui, fait de l'OAuth 2 sans OIDC : pas d'`id_token`, on lit
+`GET /user`.

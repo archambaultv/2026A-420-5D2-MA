@@ -1,0 +1,142 @@
+---
+sidebar_position: 11
+sidebar_label: 10. PostgreSQL en conteneur
+description: "Quiz M9, semaine 5 : la base passe dans un conteneur PostgreSQL, le repository devient asynchrone, les tests de la semaine 4 prouvent que rien n'a cassé, et une fonction de plus pour le rapport de l'auteur"
+---
+
+# Exercice 10 : PostgreSQL en conteneur
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre. Il demande
+**Docker Desktop**.
+
+:::
+
+Cette semaine, SQLite cède sa place à PostgreSQL. La migration est **fournie**
+: le `repository/` est réécrit avec `pg` et utilise `await`. Votre travail est
+de la mettre en marche puis d'écrire une fonction dans
+le nouveau dialecte. Notes à garder ouvertes : [PostgreSQL en
+conteneur](/notes_de_cours/postgresql/postgres_en_conteneur).
+
+## Jalon 0 : partir du bon pied
+
+```bash
+git checkout main
+git pull
+git checkout -b sem-05
+npm install          # pg est arrivé, node:sqlite est parti
+```
+
+**Avant de démarrer quoi que ce soit d'autre**, lancez les tests :
+
+```bash
+npm test
+```
+
+Lisez l'erreur. `ECONNREFUSED 127.0.0.1:5432` : l'API cherche un **serveur**
+sur le port 5432, et il n'y en a pas.
+
+## Jalon 1 : le serveur et les tests de la semaine 4
+
+```bash
+docker compose up -d postgres
+docker compose ps
+```
+
+Le service passe de `health: starting` à `healthy` en une ou deux secondes.
+Puis :
+
+```bash
+npm test
+```
+
+**Vérifier.** `pass 17`, `fail 0`, `todo 4`. Aucun test n'a changé depuis
+la semaine 4, sauf `helpers.js` qui crée une base temporaire au lieu d'un
+fichier. Ce sont ces tests qui disent que la migration n'a rien cassé :
+c'est exactement ce pour quoi vous les avez écrits.
+
+Démarrez ensuite l'application (`npm run dev`) et **jouez une partie à deux
+navigateurs**. Rien n'a changé à l'écran.
+
+## Jalon 2 : regarder dans la base
+
+```bash
+docker compose exec postgres psql -U quizm9
+```
+
+Trois questions, trois requêtes, à écrire dans `psql` :
+
+1. Les codes des parties jouées et leur état (`\dt` pour les tables, `\d game`
+   pour les colonnes).
+2. Le nombre de réponses reçues par partie (un `GROUP BY`).
+3. Le classement de la dernière partie : pseudonyme et score, du meilleur au
+   moins bon.
+
+**Vérifier.** Quittez `psql` (`\q`), puis `docker compose down` et
+`docker compose up -d postgres` : vos parties sont encore là. `docker
+compose down -v`, `up -d postgres`, `npm run dev` : la base est vide, les
+questionnaires de `seed.sql` sont revenus.
+
+## Jalon 3 : la CI a un service
+
+Regardez `.github/workflows/ci.yml` : le travail `test` déclare un
+`services: postgres`. Poussez votre branche :
+
+```bash
+git push -u origin sem-05
+```
+
+**Vérifier.** Sur GitHub, onglet Actions, ouvrez le journal du travail
+`test` : la première section, *Initialize containers*, démarre `postgres:17`
+et attend qu'il soit `healthy`, avant même `actions/checkout`. Puis `npm
+test` est vert, sur une machine où PostgreSQL n'était pas installé.
+
+## Jalon 4 : les parties d'un questionnaire
+
+- **Fichiers** : `server/src/repository/quizzes.js`, `server/src/repository/index.js`,
+  `server/src/app.js`, `server/test/quizzes.test.js`
+
+L'auteur veut savoir combien de fois son questionnaire a été joué. Écrivez :
+
+1. **`listGamesForQuiz(quizId)`** dans `quizzes.js`, exportée par
+   `index.js`. Elle retourne les parties du questionnaire, la plus récente
+   d'abord, chacune avec le nombre de joueurs :
+   `[{ id, code, state, createdAt, playerCount }]`.
+   
+   La requête part de `game` (`WHERE game.quiz_id = $1`) et compte les lignes
+   de `player` qui pointent vers chaque partie : `LEFT JOIN player ON
+   player.game_id = game.id`, `COUNT(player.id)`, `GROUP BY game.id`, `ORDER BY
+   game.created_at DESC`. `listQuizzes`, en haut du fichier, a exactement cette
+   forme. Les colonnes de la base sont en `snake_case` et les champs retournés
+   en `camelCase` : il faut des alias entre guillemets doubles (`AS
+   "createdAt"`, `AS "playerCount"`) pour que PostgreSQL garde la casse.
+2. **`GET /api/quizzes/:id/games`** dans `app.js` : 404 si le questionnaire
+   n'existe pas, sinon 200 et la liste. Regardez la route
+   `GET /api/quizzes/:id` juste au-dessus, et n'oubliez pas l'`await` dans
+   le `if`.
+3. **Les deux `test.todo`** à la fin de `quizzes.test.js`. Le commentaire
+   au-dessus décrit le scénario.
+
+**Vérifier.** `npm test` : `todo 2`, aucun `fail`. Dans le navigateur,
+`http://localhost:3000/api/quizzes/1/games` liste les parties que vous avez
+jouées au jalon 1.
+
+## En panne ?
+
+- `ECONNREFUSED 127.0.0.1:5432` : PostgreSQL ne tourne pas. `docker compose
+  ps`, puis `docker compose up -d postgres`.
+- `cannot connect to the Docker daemon` : Docker Desktop n'est pas démarré.
+- `port is already allocated` sur 5432 : un PostgreSQL est déjà installé sur
+  votre poste, ou un conteneur d'un autre projet tourne. `docker ps` ;
+  sinon, arrêtez le service local.
+- `password authentication failed` : le volume a été créé avec un autre mot
+  de passe. `docker compose down -v` puis `up -d postgres`.
+- Un test échoue avec `database "quizm9_test_…" already exists` : un `npm
+  test` précédent a été interrompu. Dans `psql`, `\l` puis `DROP DATABASE
+  quizm9_test_…;`.
+- `syntax error at or near "?"` : un `?` de SQLite est resté ; `pg` veut `$1`.
+- `bind message supplies 1 parameters, but prepared statement requires 2` :
+  le tableau de valeurs n'a pas le bon nombre d'éléments.
+- La condition d'un `if` sur une fonction du repository est toujours vraie :
+  il manque un `await`.

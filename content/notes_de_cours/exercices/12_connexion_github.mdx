@@ -1,0 +1,160 @@
+---
+sidebar_position: 12
+sidebar_label: 11. Se connecter avec GitHub
+description: "Quiz M9, semaine 5 : OAuth 2 avec GitHub écrit à la main, la session dans un cookie signé, et « Mes questionnaires » qui devient vrai"
+---
+
+# Exercice 11 : se connecter avec GitHub
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre. Il demande un
+compte GitHub et **Docker Desktop**, démarré.
+
+:::
+
+Un questionnaire va enfin appartenir à quelqu'un. Le squelette est fourni
+(`server/src/auth.js`, `server/src/session.js`, la barre de navigation) ;
+vous écrivez le cœur du protocole, puis vous en servez. Notes à garder
+ouvertes : [OAuth 2](/notes_de_cours/auth/oauth) et
+[La session](/notes_de_cours/auth/session).
+
+Cet exercice et l'[exercice 10](/notes_de_cours/exercices/postgresql_quiz_m9)
+partent du même `main` et ne dépendent pas l'un de l'autre.
+
+## Jalon 0 : partir du bon pied
+
+```bash
+git checkout main
+git pull
+git checkout -b sem-05          # ou la branche de l'exercice 10, si elle existe
+npm install
+docker compose up -d postgres   # la base tourne dans un conteneur depuis cette semaine
+npm run dev
+```
+
+**Créez votre application OAuth sur GitHub.** Sur github.com : votre avatar,
+*Settings*, tout en bas *Developer settings*, *OAuth Apps*, *New OAuth App*.
+
+| Champ | Valeur |
+|---|---|
+| Application name | `Quiz M9 (dev)` |
+| Homepage URL | `http://localhost:5173` |
+| Authorization callback URL | `http://localhost:5173/api/auth/callback` |
+
+*Register application*, puis *Generate a new client secret*. Copiez
+`server/.env.example` en `server/.env` et remplissez `GITHUB_CLIENT_ID`,
+`GITHUB_CLIENT_SECRET` et `SESSION_SECRET` (n'importe quelle longue chaîne
+aléatoire). Redémarrez `npm run dev` : le serveur lit `.env` au démarrage.
+
+`.env` est dans `.gitignore`. Vérifiez avec `git status` qu'il n'apparaît
+pas. Le secret ne va jamais dans le dépôt.
+
+**Vérifier.** Cliquez sur « Se connecter avec GitHub » dans la barre de
+navigation. Vous arrivez sur GitHub, qui vous demande d'autoriser Quiz M9,
+puis vous revenez sur `/api/auth/callback` avec... `À faire : le rappel
+OAuth.` C'est le jalon 1. Regardez l'URL : `?code=…&state=…`.
+
+## Jalon 1 : le rappel
+
+- **Fichier** : `server/src/auth.js`, route `GET /api/auth/callback`
+
+La vérification du `state` est fournie. Le commentaire sur place décrit les
+trois étapes qui restent : échanger le code contre un jeton (un `fetch`
+`POST` vers GitHub, avec le secret), lire le profil avec le jeton (un
+`fetch` `GET` avec `Authorization: Bearer`), puis
+`repository.findOrCreateAccount(...)`, `writeSession(...)` et une
+redirection vers `/quizzes`.
+
+Deux détails de GitHub : l'échange veut un en-tête `accept:
+application/json`, sinon il répond en `a=b&c=d` ; l'API veut un en-tête
+`user-agent`, n'importe lequel.
+
+**Vérifier.** Le clic vous ramène sur `/quizzes`, et la barre de navigation
+affiche votre avatar et votre nom d'utilisateur. Dans `psql`
+(`docker compose exec postgres psql -U quizm9`), `SELECT * FROM account;` a
+une ligne : la vôtre. Ouvrez les outils de développement, onglet *Réseau*,
+et refaites la connexion : suivez les redirections, trouvez le `Set-Cookie`.
+
+## Jalon 2 : « Mes questionnaires » devient vrai
+
+- **Fichiers** : `server/src/app.js`, `server/src/repository/quizzes.js`
+
+La page `/quizzes` appelle déjà `GET /api/me/quizzes`, mais l'API répond
+tous les questionnaires, à tout le monde. Trois changements :
+
+1. **`listQuizzesForAccount(accountId)`** dans `quizzes.js` : comme
+   `listQuizzes`, avec un `WHERE quiz.account_id = $1`.
+2. **`GET /api/me/quizzes`** : `currentAccount(req)` donne le compte
+   connecté, ou `null`. 401 s'il n'y en a pas, sinon ses questionnaires.
+3. **`POST /api/quizzes`** : 401 sans compte ; sinon le questionnaire est
+   créé avec `account.id`.
+
+**Vérifier.** Connecté, `/quizzes` est vide (les questionnaires de
+`seed.sql` n'ont pas d'auteur) ; créez-en un, il apparaît. Déconnecté (une
+fenêtre privée), `/quizzes` renvoie à l'accueil, et `curl` (ou `curl.exe`
+dans PowerShell) est refusé :
+
+```bash
+curl -i -X POST http://localhost:3000/api/quizzes -H "content-type: application/json" -d "{\"title\":\"Pirate\"}"
+```
+
+`401`. Le navigateur n'est pas le seul à parler à l'API ; c'est elle qui
+décide.
+
+## Jalon 3 : se déconnecter
+
+- **Fichier** : `client/app/routes/logout.jsx`
+
+Le bouton « Se déconnecter » est un `<Form method="post" action="/logout">` ;
+son `action` ne fait rien pour l'instant. Elle doit appeler
+`POST /api/auth/logout` avec `apiFetch`, puis rediriger vers `/` en
+recopiant l'en-tête `set-cookie` de la réponse de l'API dans la sienne.
+Pourquoi recopier ? L'`action` tourne sur le serveur du client ; le cookie
+que l'API efface, c'est dans la réponse au **navigateur** qu'il faut
+l'effacer.
+
+**Vérifier.** Le clic vous ramène à l'accueil, déconnecté. Dans l'onglet
+*Réseau*, la réponse `302` de `/logout` porte un `Set-Cookie` avec une date
+d'expiration passée.
+
+## Jalon 4 : les tests
+
+- **Fichier** : `server/test/quizzes.test.js`
+
+Deux `test.todo` de la semaine 5 : créer sans être connecté est refusé, et
+`GET /api/me/quizzes` ne montre que les questionnaires de l'auteur.
+`api.login('bob')` fabrique une session de test sans passer par GitHub :
+lisez comment dans `helpers.js`.
+
+**Vérifier.** `npm test` : `todo 2` (ceux de l'exercice 10, s'il n'est pas
+fait), aucun `fail`.
+
+## Prédire, observer, expliquer
+
+Dans les outils de développement, onglet *Application* (ou *Stockage*),
+modifiez un caractère du cookie `quizm9_session`. Prédisez ce que `/quizzes`
+va faire. Rechargez. Puis lisez `verifySession` dans `session.js`.
+
+Deuxième prédiction : si on retirait la vérification du `state` dans le
+rappel, qu'est-ce qu'un lien piégé `…/api/auth/callback?code=…` pourrait
+faire ?
+
+## En panne ?
+
+- `The redirect_uri MUST match the registered callback URL` : l'URL de
+  rappel de l'application GitHub n'est pas exactement
+  `http://localhost:5173/api/auth/callback`.
+- `client_id` vide dans l'URL de GitHub : `server/.env` n'est pas lu.
+  Il est dans `server/`, pas à la racine ? `npm run dev` a été redémarré ?
+- `Retour OAuth invalide (state)` : la session a changé entre le départ et
+  le retour (deux onglets, ou `SESSION_SECRET` modifié entre les deux).
+  Recommencez depuis « Se connecter ».
+- `bad_verification_code` : un code ne sert qu'une fois et expire vite ;
+  repartez du bouton, pas du bouton *Précédent*.
+- Connecté dans l'API (`http://localhost:3000/api/me` répond) mais pas dans
+  la page : le `loader` n'a pas transmis le cookie ; il faut `apiFetch(request,
+  …)`, pas `fetch`.
+- `401` dans les tests alors que la route marche dans le navigateur : la
+  requête du test n'envoie pas le cookie ; quatrième argument de
+  `api.request`.

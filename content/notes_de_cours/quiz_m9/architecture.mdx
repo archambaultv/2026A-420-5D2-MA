@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 sidebar_label: L'architecture
-description: "L'architecture de Quiz M9 : deux processus, sept pages, le chemin d'une donnée. Document vivant, mis à jour quand le dépôt change."
+description: "L'architecture de Quiz M9 : trois processus, huit pages, le chemin d'une donnée. Document vivant, mis à jour quand le dépôt change."
 ---
 
 # L'architecture de Quiz M9
@@ -9,34 +9,39 @@ description: "L'architecture de Quiz M9 : deux processus, sept pages, le chemin 
 Tout le cours s'appuie sur **Quiz M9**, un jeu-questionnaire en direct : un
 animateur crée une partie et obtient un **code** ; les joueurs rejoignent avec
 ce code et un pseudonyme, sans compte ; les questions défilent, le classement
-monte.
+monte. Les auteurs, eux, se connectent avec GitHub pour écrire leurs
+questionnaires.
 
 **Cette page décrit le dépôt
 [github.com/archambaultv/2026A-420-5D2-MA-QuizM9](https://github.com/archambaultv/2026A-420-5D2-MA-QuizM9)
 dans sa version courante** : elle est mise à jour chaque fois que
 l'architecture change. Gardez-la ouverte pendant que vous travaillez dedans.
 
-*Dernière mise à jour : semaine 3.*
+*Dernière mise à jour : semaine 5.*
 
-## Deux processus
+## Trois processus
 
-`npm run dev` démarre **deux serveurs** :
+`docker compose up -d postgres` démarre la base, puis `npm run dev` démarre
+**deux serveurs** :
 
 ```
 ┌──────────────────────────────┐        ┌──────────────────────────────┐
 │  client : port 5173          │        │  serveur : port 3000         │
 │  React Router mode framework │  /api  │  Express                     │
-│  rend les sept pages         │ ─────► │  route → moteur → repository │
-│  (HTML + React)              │        │            │                 │
-└──────────────────────────────┘        │            ▼                 │
-        ▲                               │  data/quizm9.db (SQLite)     │
-        │ http://localhost:5173         └──────────────────────────────┘
-     navigateur
+│  rend les huit pages         │ ─────► │  route → moteur → repository │
+│  (HTML + React)              │        │                    │         │
+└──────────────────────────────┘        └────────────────────┼─────────┘
+        ▲                                                    │ pg
+        │ http://localhost:5173         ┌────────────────────▼─────────┐
+     navigateur                         │  postgres : port 5432        │
+                                        │  (conteneur Docker, volume)  │
+                                        └──────────────────────────────┘
 ```
 
 - Le **serveur** (`server/`) ne parle que JSON : c'est l'API. Toutes les
-  données vivent chez lui, dans `quizm9.db` (ou au chemin donné par la
-  variable d'environnement `DB_PATH`).
+  données vivent dans **PostgreSQL**, un conteneur Docker que l'API joint à
+  l'adresse `DATABASE_URL` (semaine 5). C'est aussi l'API qui sait qui est
+  connecté : le cookie de session est le sien.
 - Le **client** (`client/`) rend les pages. Quand une page a besoin de
   données, elles viennent **toujours** de l'API, jamais d'un accès direct à
   la base.
@@ -55,9 +60,9 @@ Ouvrez **deux navigateurs** (ou une fenêtre normale et une fenêtre privée) :
 l'animateur dans l'une, un joueur dans l'autre. Vous pouvez ajouter un deuxième
 joueur en ouvrant une autre fenêtre privée.
 
-## Les sept pages
+## Les huit pages
 
-L'application Quiz M9 a sept pages. Le dossier `client/app/routes/`
+L'application Quiz M9 a huit pages. Le dossier `client/app/routes/`
 contient un fichier par page.
 
 | Page | URL | Fichier |
@@ -67,6 +72,7 @@ contient un fichier par page.
 | Liste d'animateur | `/quizzes` | `quizzes.jsx` |
 | Un questionnaire | `/quizzes/:id` | `quiz-details.jsx` |
 | Éditeur | `/quizzes/:id/edit` | `quiz-edit.jsx` |
+| Déconnexion (action seulement) | `/logout` | `logout.jsx` |
 | Salon d'attente | `/salon/:code` | `lobby.jsx` |
 | Salle de jeu | `/jeu/:code` | `game.jsx` |
 
@@ -75,32 +81,39 @@ Le scénario d'une partie : l'animateur choisit un questionnaire dans le
 partie se joue dans la **salle de jeu**.
 
 L'espace auteur (liste, questionnaire, éditeur) est rendu **côté serveur** :
-ses pages lisent par un `loader` et écrivent par une `action` (semaine 3).
-Le catalogue reste rendu côté client, comme témoin.
+ses pages lisent par un `loader` et écrivent par une `action` (semaine 3),
+en transmettant le cookie de session à l'API (`apiFetch`, semaine 5). La
+liste d'animateur ne montre que les questionnaires de l'auteur connecté. Le
+catalogue reste rendu côté client, comme témoin.
 
 ## Se repérer dans le dépôt
 
 Voici la structure du dépôt, avec les fichiers les plus importants.
 
 ```
-compose.yml              Quiz M9 d'une seule commande : docker compose up
+compose.yml              les trois services : postgres, api, client
+deploy/compose.yml       la même chose avec des images du registre, sans code
+.github/workflows/ci.yml les tests à chaque push, les images sur main
 server/
   Dockerfile             l'image de l'API
-  src/server.js          les routes de l'API
+  .env.example           les secrets attendus (GitHub OAuth, session)
+  src/server.js          le point d'entrée : app.listen
+  src/app.js             les routes de l'API
+  src/auth.js            « Se connecter avec GitHub » : OAuth 2
+  src/session.js         le cookie de session, signé
   src/game.js            le moteur de jeu (états, échéances, pointage)
   src/scoring.js         calculateScore, la fonction pure de pointage
-  src/repository/        TOUT le SQL
-  data/schema.sql        les sept tables, fourni au complet
+  src/repository/        TOUT le SQL, asynchrone (pg)
+  data/schema.sql        les sept tables, dialecte PostgreSQL
   data/seed.sql          les questionnaires de démonstration
-  data/quizm9.db         votre base locale (non versionnée)
-  verifier/              le harnais npm run verifier qui sert de tests unitaires
+  test/                  tests unitaires et d'intégration (node:test)
 client/
   Dockerfile             l'image du client, en deux étapes
   server.js              le serveur de production du client (relais /api + pages)
   app/routes.js          une ligne par page
-  app/routes/            les sept pages
+  app/routes/            les huit pages
   app/api.js             les appels fetch vers l'API, depuis le navigateur
-  app/api-url.js         l'adresse de l'API, vue des loader et action
+  app/api-url.js         l'adresse de l'API et apiFetch, pour les loader et action
   app/useGame.js         le sondage toutes les secondes
 ```
 
@@ -131,21 +144,22 @@ le repository n'applique pas de règles de jeu ; le moteur ne lit jamais
 Suivons une première requête, `POST /api/games/:code/answers`, envoyée
 quand un joueur répond :
 
-1. **La route** (`server.js`) retrouve la partie
-   (`repository.findGameByCode`), vérifie qu'une question est en cours, que
+1. **La route** (`app.js`) retrouve la partie
+   (`await repository.findGameByCode`), vérifie qu'une question est en cours, que
    le joueur existe, qu'il n'a pas déjà répondu, que le choix est valide.
    Sinon : `400` et un message.
 2. Elle enregistre la réponse : `repository.recordAnswer(game.id, player.id,
    question.id, choiceId, Date.now())`. L'horodatage est pris **ici**, sur
    le serveur.
-3. **Le repository** exécute l'`INSERT INTO answer …` et retourne l'id.
-4. La ligne est dans le fichier `quizm9.db`. Le serveur peut redémarrer :
+3. **Le repository** envoie l'`INSERT INTO answer … RETURNING id` à
+   PostgreSQL et retourne l'id, quand la réponse arrive.
+4. La ligne est dans la base, dans le conteneur. Le serveur peut redémarrer :
    elle y sera encore.
 
 Suivons une deuxième requête, `POST /api/games/:code/next`, envoyée quand
 l'animateur clôt la question en cours :
 
-1. **La route** (`server.js`) retrouve la partie ; elle est en état
+1. **La route** (`app.js`) retrouve la partie ; elle est en état
    `question`, la route demande donc au moteur de la clore
    (`closeQuestion`).
 2. **Le moteur** (`game.js`) relit toutes les réponses reçues
@@ -159,6 +173,8 @@ l'animateur clôt la question en cours :
    **transaction**. Le moteur groupe ses trois appels dans
    `repository.withTransaction(...)`, dont le `BEGIN`, le `COMMIT` et le
    `ROLLBACK` sont écrits dans `repository/db.js` : tout passe, ou rien.
+   Depuis PostgreSQL, la transaction vit sur une seule connexion, `tx`,
+   que le moteur passe à chacun des trois appels.
 4. La route répond l'état public de la partie : les joueurs voient les
    résultats et le classement à jour.
 
@@ -168,22 +184,35 @@ questionnaire sur `/quizzes` :
 
 1. Le `<Form method="post">` envoie le titre à l'**`action`** de la route,
    qui s'exécute sur le serveur du client (5173).
-2. L'`action` appelle `POST /api/quizzes` sur Express (3000), à l'adresse
-   `API_URL`.
-3. **La route** valide le titre (400 s'il est vide), puis
-   `repository.createQuiz(title)` fait l'`INSERT`.
+2. L'`action` appelle `POST /api/quizzes` sur Express (3000) avec
+   `apiFetch`, qui transmet le cookie de session du navigateur.
+3. **La route** lit le compte connecté dans le cookie (401 s'il n'y en a
+   pas), valide le titre (400 s'il est vide), puis
+   `repository.createQuiz(title, account.id)` fait l'`INSERT`.
 4. L'`action` reçoit l'id et répond `redirect('/quizzes/4/edit')` : le
    navigateur arrive sur l'éditeur, dont le `loader` relit le questionnaire.
 
+## Se connecter avec GitHub
+
+L'auteur n'a pas de mot de passe chez nous : il se connecte avec GitHub
+(OAuth 2, `server/src/auth.js`). Au retour, l'API crée ou retrouve son
+compte (`account`, identifié par `github_id`) et pose un cookie de session
+signé (`server/src/session.js`). Le navigateur renvoie ce cookie à chaque
+requête ; le relais (`Vite` en développement, `client/server.js` en
+production) et `apiFetch` le transmettent à l'API, qui seule décide qui est
+connecté. Les identifiants de l'application GitHub et la clé de signature
+viennent de `server/.env`, jamais du dépôt.
+
 ## Avec Docker
 
-`docker compose up --build` démarre les deux processus dans deux
-conteneurs, sur un réseau privé où le client joint l'API par son nom
-(`API_URL=http://api:3000`). La base vit dans le volume `quizm9-data`,
-monté sur `/data` dans le conteneur de l'API (`DB_PATH=/data/quizm9.db`) :
-elle survit à la destruction des conteneurs. En production, le client est
+`docker compose up --build` démarre les trois processus dans trois
+conteneurs, sur un réseau privé où chacun joint les autres par leur nom
+(`DATABASE_URL=postgres://…@postgres:5432/quizm9`, `API_URL=http://api:3000`).
+Les fichiers de PostgreSQL vivent dans le volume `quizm9-pgdata` : ils
+survivent à la destruction des conteneurs. En production, le client est
 construit puis servi par `client/server.js`, qui relaie `/api` comme Vite
-le fait en développement.
+le fait en développement. `deploy/compose.yml` décrit la même chose avec
+des images tirées du registre, pour une machine où il n'y a que Docker.
 
 ## Le temps réel de la partie
 
