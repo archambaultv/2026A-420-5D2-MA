@@ -9,15 +9,13 @@ description: "Quiz M9, semaine 5 : OAuth 2 avec GitHub écrit à la main, la ses
 :::info
 
 Ceci est un exercice formatif. Il n'y a rien à remettre. Il demande un
-compte GitHub et **Docker Desktop**, démarré.
+compte GitHub et **Docker Desktop**, démarré. Sans Docker sur votre poste,
+l'exercice se fait tout aussi bien avec SQLite (voir le jalon 0).
 
 :::
 
 Notes à garder ouvertes : [OAuth 2](/notes_de_cours/auth/oauth) et [La
 session](/notes_de_cours/auth/session).
-
-Cet exercice et l'[exercice 10](/notes_de_cours/exercices/postgresql_quiz_m9)
-partent du même `main` et ne dépendent pas l'un de l'autre.
 
 ## Jalon 0 : partir du bon pied
 
@@ -29,6 +27,12 @@ npm install
 docker compose up -d postgres   # la base tourne dans un conteneur depuis cette semaine
 npm run dev
 ```
+
+**Sans Docker Desktop** : sautez `docker compose`. Au moment de remplir
+`server/.env` (ci-dessous), décommentez-y aussi la ligne
+`DATABASE_URL=sqlite:data/quizm9.db`. La base est alors un fichier, comme
+aux semaines 1 à 4 ; l'API, elle, ne change pas (`README.md`, « Sans
+Docker »).
 
 **Créez votre application OAuth sur GitHub.** Sur github.com : votre avatar,
 *Settings*, tout en bas *Developer settings*, *OAuth Apps*, *New OAuth App*.

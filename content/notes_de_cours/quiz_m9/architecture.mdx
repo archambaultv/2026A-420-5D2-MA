@@ -104,7 +104,9 @@ server/
   src/game.js            le moteur de jeu (états, échéances, pointage)
   src/scoring.js         calculateScore, la fonction pure de pointage
   src/repository/        TOUT le SQL, asynchrone (pg)
+  src/repository/db.js   l'aiguilleur : PostgreSQL, ou SQLite sans Docker
   data/schema.sql        les sept tables, dialecte PostgreSQL
+  data/schema.sqlite.sql les mêmes, dialecte SQLite (poste sans Docker)
   data/seed.sql          les questionnaires de démonstration
   test/                  tests unitaires et d'intégration (node:test)
 client/
@@ -134,7 +136,7 @@ moteur de jeu (game.js)    les règles : états, échéances, pointage
 repository/ (index.js)     TOUT le SQL, et rien d'autre que le SQL
    │
    ▼
-quizm9.db (SQLite)         la base de données
+PostgreSQL                 la base de données (ou SQLite, sans Docker)
 ```
 
 Chaque étage ne connaît que celui du dessous. La route ne fait pas de SQL ;
@@ -174,7 +176,10 @@ l'animateur clôt la question en cours :
    `repository.withTransaction(...)`, dont le `BEGIN`, le `COMMIT` et le
    `ROLLBACK` sont écrits dans `repository/db.js` : tout passe, ou rien.
    Depuis PostgreSQL, la transaction vit sur une seule connexion, `tx`,
-   que le moteur passe à chacun des trois appels.
+   que le moteur passe à chacun des trois appels. Ce même `db.js` choisit
+   le moteur selon `DATABASE_URL` : PostgreSQL (`db-postgres.js`), ou SQLite
+   en secours sur un poste sans Docker (`db-sqlite.js`, qui imite
+   l'interface de pg). Le reste de `repository/` ne voit pas la différence.
 4. La route répond l'état public de la partie : les joueurs voient les
    résultats et le classement à jour.
 
