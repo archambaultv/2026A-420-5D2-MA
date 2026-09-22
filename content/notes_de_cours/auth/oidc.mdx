@@ -1,20 +1,60 @@
 ---
 sidebar_position: 3
 sidebar_label: OpenID Connect
-description: "La couche identité posée sur OAuth 2 : le scope openid, l'id_token et pourquoi GitHub n'en fait pas"
+description: "La couche d'identification posée sur OAuth 2 : le scope openid, l'id_token, et pourquoi GitHub n'en fait pas."
 ---
 
 # OpenID Connect
 
-[OAuth 2](oauth) dit comment obtenir un jeton pour **accéder** à des
-ressources. Il ne dit pas qui est l'utilisateur ; chaque fournisseur a sa
-route de profil, avec ses champs.
+[OAuth 2](oauth) est un protocole d'**autorisation** : il livre un jeton
+d'accès, qui dit ce que le porteur a le droit de faire. Pour savoir **qui** est
+l'utilisateur, Quiz M9 fait un pas de plus, hors protocole : elle se sert du
+jeton pour lire `GET /user` et déduit l'identité du profil obtenu. Chaque
+fournisseur a sa route de profil et ses champs, et rien dans le jeton ne dit à
+qui il a été remis.
 
-**OpenID Connect** (OIDC) ajoute à OAuth 2 une réponse standard à cette
-question : avec le scope `openid`, le fournisseur renvoie en plus un
-**`id_token`**, un JWT signé qui contient l'identité (`sub`, l'identifiant
-stable ; `email`, `name`). Google, Microsoft, Apple parlent OIDC ; le client
-lit le même jeton chez chacun.
+**OpenID Connect** (OIDC) est la couche d'**identification** posée sur OAuth 2.
+Même flux, mêmes rôles, une réponse standard à la question « qui ».
+
+## Le scope `openid`
+
+Le client ajoute `openid` aux scopes demandés à l'étape 1. En plus de
+l'`access_token`, la réponse de l'étape 3a contient alors un **`id_token`** :
+un JWT signé par le fournisseur.
+
+```json
+{
+  "iss": "https://accounts.google.com",
+  "sub": "1082... (identifiant stable de l'utilisateur)",
+  "aud": "notre client_id",
+  "exp": 1758556800,
+  "email": "octo@example.com",
+  "name": "The Octocat"
+}
+```
+
+Deux différences de nature avec le jeton d'accès :
+
+**C'est une affirmation d'identité, pas un droit d'accès.** Le fournisseur y
+écrit « j'ai authentifié `sub` à telle heure » et le signe. Le client vérifie
+la signature et lit le contenu, sans appeler de route de profil.
+
+**Il est adressé.** Le champ `aud` porte le `client_id` du destinataire. Un
+client qui reçoit un `id_token` dont l'`aud` n'est pas le sien le rejette.
+C'est précisément ce qui manquait au jeton d'accès.
+
+Vérifier un `id_token`, c'est donc quatre contrôles : signature valide avec la
+clé publique du fournisseur, `iss` attendu, `aud` égal à notre `client_id`,
+`exp` pas dépassé. Une bibliothèque le fait ; ne l'écrivez pas à la main.
+
+## En pratique
+
+Google, Microsoft, Apple et la plupart des fournisseurs d'entreprise parlent
+OIDC. Le même code lit le même jeton chez chacun : seule change l'URL de
+découverte, un document JSON qui annonce les routes et les clés publiques du
+fournisseur.
 
 GitHub, lui, fait de l'OAuth 2 sans OIDC : pas d'`id_token`, on lit
-`GET /user`.
+`GET /user`. Le `sub` d'OIDC et le `id` de GitHub jouent le même rôle, celui
+de l'identifiant stable que [la session](session) range dans la colonne
+`github_id`.

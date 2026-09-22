@@ -13,11 +13,8 @@ compte GitHub et **Docker Desktop**, démarré.
 
 :::
 
-Un questionnaire va enfin appartenir à quelqu'un. Le squelette est fourni
-(`server/src/auth.js`, `server/src/session.js`, la barre de navigation) ;
-vous écrivez le cœur du protocole, puis vous en servez. Notes à garder
-ouvertes : [OAuth 2](/notes_de_cours/auth/oauth) et
-[La session](/notes_de_cours/auth/session).
+Notes à garder ouvertes : [OAuth 2](/notes_de_cours/auth/oauth) et [La
+session](/notes_de_cours/auth/session).
 
 Cet exercice et l'[exercice 10](/notes_de_cours/exercices/postgresql_quiz_m9)
 partent du même `main` et ne dépendent pas l'un de l'autre.
@@ -40,12 +37,28 @@ npm run dev
 |---|---|
 | Application name | `Quiz M9 (dev)` |
 | Homepage URL | `http://localhost:5173` |
-| Authorization callback URL | `http://localhost:5173/api/auth/callback` |
+| Redirect URIs | `http://localhost:5173/api/auth/callback` |
 
-*Register application*, puis *Generate a new client secret*. Copiez
-`server/.env.example` en `server/.env` et remplissez `GITHUB_CLIENT_ID`,
-`GITHUB_CLIENT_SECRET` et `SESSION_SECRET` (n'importe quelle longue chaîne
-aléatoire). Redémarrez `npm run dev` : le serveur lit `.env` au démarrage.
+Laissez *Application description* vide et ne cochez pas *Enable Device
+Flows* : c'est un autre flot OAuth, pas celui de l'exercice. *Expire user
+access tokens* n'a pas d'effet ici, on utilise le jeton une seule fois pour
+lire le profil.
+
+*Register application*. Copiez `server/.env.example` en `server/.env`, puis
+remplissez les trois valeurs :
+
+- `GITHUB_CLIENT_ID` : affiché en haut de la page de l'application, sous le
+  nom (*Client ID*). Il n'est pas secret.
+- `GITHUB_CLIENT_SECRET` : cliquez *Generate a new client secret* sur cette
+  même page. GitHub ne l'affiche qu'une fois, copiez-le tout de suite.
+- `SESSION_SECRET` : une longue chaîne aléatoire à vous. Node l'engendre,
+  avec la même commande sur Windows, macOS et Linux :
+
+  ```bash
+  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  ```
+
+Redémarrez `npm run dev` : le serveur lit `.env` au démarrage.
 
 `.env` est dans `.gitignore`. Vérifiez avec `git status` qu'il n'apparaît
 pas. Le secret ne va jamais dans le dépôt.
@@ -60,23 +73,24 @@ OAuth.` C'est le jalon 1. Regardez l'URL : `?code=…&state=…`.
 - **Fichier** : `server/src/auth.js`, route `GET /api/auth/callback`
 
 La vérification du `state` est fournie. Le commentaire sur place décrit les
-trois étapes qui restent : échanger le code contre un jeton (un `fetch`
-`POST` vers GitHub, avec le secret), lire le profil avec le jeton (un
-`fetch` `GET` avec `Authorization: Bearer`), puis
-`repository.findOrCreateAccount(...)`, `writeSession(...)` et une
-redirection vers `/quizzes`.
+trois étapes qui restent :
 
-Deux détails de GitHub : l'échange veut un en-tête `accept:
-application/json`, sinon il répond en `a=b&c=d` ; l'API veut un en-tête
+1. Échanger le code contre un jeton : un `fetch` `POST` vers GitHub, avec
+   le secret.
+2. Lire le profil avec le jeton : un `fetch` `GET` avec
+   `Authorization: Bearer`.
+3. Appeler `repository.findOrCreateAccount(...)`, puis `writeSession(...)`
+   et une redirection vers `/quizzes`.
+
+Deux détails de GitHub : l'échange veut un en-tête `accept: application/json` ; l'API veut un en-tête
 `user-agent`, n'importe lequel.
 
 **Vérifier.** Le clic vous ramène sur `/quizzes`, et la barre de navigation
 affiche votre avatar et votre nom d'utilisateur. Dans `psql`
 (`docker compose exec postgres psql -U quizm9`), `SELECT * FROM account;` a
-une ligne : la vôtre. Ouvrez les outils de développement, onglet *Réseau*,
-et refaites la connexion : suivez les redirections, trouvez le `Set-Cookie`.
+une ligne : la vôtre.
 
-## Jalon 2 : « Mes questionnaires » devient vrai
+## Jalon 2 : « Mes questionnaires » retournant les siens
 
 - **Fichiers** : `server/src/app.js`, `server/src/repository/quizzes.js`
 
@@ -110,9 +124,20 @@ Le bouton « Se déconnecter » est un `<Form method="post" action="/logout">` ;
 son `action` ne fait rien pour l'instant. Elle doit appeler
 `POST /api/auth/logout` avec `apiFetch`, puis rediriger vers `/` en
 recopiant l'en-tête `set-cookie` de la réponse de l'API dans la sienne.
-Pourquoi recopier ? L'`action` tourne sur le serveur du client ; le cookie
-que l'API efface, c'est dans la réponse au **navigateur** qu'il faut
-l'effacer.
+
+Un cookie ne s'efface pas : on en pose un nouveau, vide et déjà expiré.
+C'est ce que l'API répond à `POST /api/auth/logout` :
+
+```http
+Set-Cookie: quizm9_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT
+```
+
+Le navigateur voit une date passée et jette le cookie. Mais cet en-tête est
+dans la réponse de l'API à l'`action`, et l'`action` tourne sur le serveur
+du client : le navigateur ne l'a jamais vu. Il faut donc le recopier dans
+la réponse que l'`action`, elle, renvoie au navigateur : lisez
+`reponse.headers.get('set-cookie')` et passez-le dans les `headers` du
+`redirect('/')`.
 
 **Vérifier.** Le clic vous ramène à l'accueil, déconnecté. Dans l'onglet
 *Réseau*, la réponse `302` de `/logout` porte un `Set-Cookie` avec une date
@@ -129,16 +154,6 @@ lisez comment dans `helpers.js`.
 
 **Vérifier.** `npm test` : `todo 2` (ceux de l'exercice 10, s'il n'est pas
 fait), aucun `fail`.
-
-## Prédire, observer, expliquer
-
-Dans les outils de développement, onglet *Application* (ou *Stockage*),
-modifiez un caractère du cookie `quizm9_session`. Prédisez ce que `/quizzes`
-va faire. Rechargez. Puis lisez `verifySession` dans `session.js`.
-
-Deuxième prédiction : si on retirait la vérification du `state` dans le
-rappel, qu'est-ce qu'un lien piégé `…/api/auth/callback?code=…` pourrait
-faire ?
 
 ## En panne ?
 

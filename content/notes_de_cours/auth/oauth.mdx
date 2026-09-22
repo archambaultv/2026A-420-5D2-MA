@@ -1,29 +1,46 @@
 ---
 sidebar_position: 1
 sidebar_label: OAuth 2
-description: "Déléguer l'authentification à un fournisseur externe : pourquoi pas un mot de passe, les quatre rôles d'OAuth 2, le flux par code d'autorisation, le rôle du state contre le lien piégé, et « Se connecter avec GitHub » dans Quiz M9"
+description: "Déléguer l'autorisation à un fournisseur externe, et s'en servir pour identifier l'utilisateur."
 ---
 
 # OAuth 2
 
-Un questionnaire n'appartient à personne : n'importe qui peut ouvrir
-`/quizzes` et modifier n'importe quoi. Pour qu'un questionnaire ait un
-auteur, il faut savoir **qui** est devant le navigateur. Cette semaine, on ne
-gère pas de mots de passe : on demande à GitHub.
+Depuis le début du cours et jusqu'à la semaine 4, un questionnaire de Quiz M9
+n'appartient à personne : n'importe qui peut ouvrir `/quizzes` et modifier
+n'importe quoi. Pour qu'un questionnaire ait un auteur, il faut savoir **qui**
+est devant le navigateur.
+
+## Authentifier, autoriser
+
+Deux questions différentes, qu'on confond souvent :
+
+| | La question | Exemple |
+|---|---|---|
+| **Authentification** | Qui es-tu ? | Établir que c'est bien `octocat` devant l'écran |
+| **Autorisation** | Qu'as-tu le droit de faire ? | Laisser modifier le questionnaire 12 |
+
+L'ordre habituel est celui-là : on établit une identité, puis on décide ce
+qu'elle peut faire. Retenez la distinction, parce que **OAuth 2 répond à la
+seconde question, pas à la première**. Tout l'intérêt de la page est de voir
+comment on s'en sert quand même pour la première, et à quelle condition.
 
 ## Pourquoi pas un mot de passe
 
-Gérer des mots de passe, c'est un métier : hachage avec sel (4D2 vous a fait
-installer `bcryptjs`), politique de longueur, réinitialisation par courriel,
-double authentification, fuite de la base. Un site qui n'a pas besoin de
-tout ça a intérêt à le déléguer à quelqu'un qui le fait déjà. C'est ce que
-« Se connecter avec GitHub » (ou Google, ou Microsoft) veut dire.
+La façon la plus simple de savoir qui est devant le navigateur est de lui
+demander un identifiant et un mot de passe. Mais, gérer des mots de passe,
+c'est un métier : hachage avec sel, politique de longueur, réinitialisation par
+courriel, double authentification, fuite de la base. Un site qui n'a pas besoin
+de tout ça a intérêt à le déléguer à quelqu'un qui le fait déjà. C'est ce que «
+Se connecter avec GitHub » (ou Google, ou Microsoft) veut dire.
 
 ## OAuth 2 : quatre rôles
 
-OAuth 2 est un protocole de **délégation** : un utilisateur autorise une
-application à accéder à des ressources chez un fournisseur, sans lui donner
-son mot de passe.
+OAuth 2 est un protocole d'**autorisation déléguée** : un utilisateur autorise
+une application à accéder en son nom à des ressources chez un fournisseur, sans
+lui donner son mot de passe. Le cas d'origine n'a rien à voir avec la
+connexion : « cette application peut lire mon agenda ». Se connecter avec
+GitHub est un usage dérivé, que la fin de la page examine.
 
 | Rôle | Dans Quiz M9 |
 |---|---|
@@ -34,6 +51,12 @@ son mot de passe.
 
 Le client n'est pas n'importe qui : il faut l'**enregistrer d'avance** chez
 le fournisseur. GitHub sait donc déjà que Quiz M9 existe.
+
+:::info
+
+Pour tout savoir sur OAuth 2, vous pouvez consulter ce [guide](https://oauth.net/2/).
+
+:::
 
 ## Le flux par code d'autorisation
 
@@ -82,7 +105,7 @@ navigateur                      Quiz M9 (API)                  GitHub
 seul cookie de l'aller-retour est celui de l'étape 1, où l'API garde sa
 copie du `state`.
 
-### Le lien piégé
+### Le state pour prévenir un lien piégé
 
 À quoi sert la comparaison de l'étape 2 ? À bloquer une attaque qui est
 l'envers de l'intuition habituelle : l'attaquante ne cherche pas à entrer
@@ -145,6 +168,28 @@ Parce que l'étape 2 passe par le navigateur, dans une URL, visible dans
 l'historique et les journaux. Le code y est inoffensif : il expire en
 quelques minutes, ne sert qu'une fois, et ne s'échange qu'avec le secret.
 
+### Ce qu'OAuth 2 ne dit pas
+
+À la fin du flux, l'API tient un **jeton d'accès**. Ce jeton dit « le porteur a
+le droit de lire ce profil ». Il ne dit pas « le porteur est cette personne ».
+Le pas que fait Quiz M9 à l'étape 4 (j'ai un jeton, `GET /user` me répond
+`octocat`, donc c'est `octocat` qui est devant le navigateur) est un
+raisonnement de plus, qui n'est écrit nulle part dans le protocole.
+
+Il tient ici parce que le jeton, l'API vient de l'obtenir elle-même : c'est elle
+qui a envoyé le navigateur chez GitHub, elle qui a reçu le code sur son URL de
+rappel, elle qui l'a échangé avec son `client_secret`, et le `state` lui
+confirme que le flux est celui qu'elle a démarré pour ce navigateur. Chaque
+maillon compte, et c'est aussi pour ça que l'attaque de la section précédente
+est une usurpation d'identité et pas seulement un détail de protocole.
+
+Il tomberait si l'application acceptait un jeton venu d'ailleurs. N'importe
+quel autre service auquel ce même utilisateur s'est connecté détient un jeton
+tout aussi valide et peut s'en servir pour se faire passer pour lui.
+
+C'est ce vide que comble [OpenID Connect](oidc) : un second jeton, signé, qui
+nomme l'utilisateur **et** le client auquel il est destiné. GitHub n'en émet
+pas, d'où le `GET /user` de l'étape 3b.
 
 ## Dans Quiz M9
 
@@ -170,6 +215,6 @@ identité, pas l'accès aux dépôts. Demandez le minimum, toujours.
 retiendra ensuite qui est connecté. Il n'y a encore personne à retenir à
 l'étape 1, mais le mécanisme est déjà en place.
 
-Le profil est en main, GitHub a fini son travail. Maintenant quoi faire avec cet
-identité ? C'est le sujet de la page suivante :
-[La session](session).
+Le profil est en main, GitHub a fini son travail. L'autorisation déléguée a
+servi, une fois, à établir une identité. Que faire de cette identité ? C'est le
+sujet de la page suivante : [La session](session).

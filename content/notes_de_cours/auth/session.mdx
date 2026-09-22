@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 sidebar_label: La session
-description: "Après OAuth : transformer un profil GitHub en compte, puis retenir qui est connecté d'une requête à l'autre."
+description: "Après OAuth : transformer un profil GitHub en compte, puis retenir qui est connecté d'une requête à l'autre avec un jeton signé dans un cookie."
 ---
 
 # La session
@@ -12,19 +12,23 @@ Le flux [OAuth 2](oauth) se termine sur un profil et une redirection :
 { "id": 583231, "login": "octocat", "name": "The Octocat", "avatar_url": "https://…" }
 ```
 
-GitHub nous a dit qui est devant le navigateur. **Une fois.** La requête
+GitHub nous a laissé établir qui est devant le navigateur. **Une fois.** La requête
 suivante, celle de `/quizzes`, arrivera nue : ni code, ni jeton, ni profil.
-HTTP n'a pas de mémoire, et le serveur n'a aucun moyen de savoir qu'elle vient
-du même navigateur que la précédente. Il faut donc **retenir** cette identité
-d'une requête à l'autre, et c'est le rôle de la session.
+HTTP n'a pas de mémoire. Retenir cette identité d'une requête à l'autre,
+c'est le rôle de la session.
+
+Dans Quiz M9, **la session est un jeton signé, transporté par un cookie que
+l'API pose elle-même** :
+
+```
+quizm9_session=<{ accountId, exp } en base64url>.<signature HMAC>
+```
 
 ## Du profil GitHub au compte
 
-Première question : qu'est-ce qu'on garde de ce profil ?
-
-**Un identifiant stable, et lui seul.** Le nom d'affichage change, l'avatar change,
-le courriel change. Le champ `id`, un entier attribué par GitHub, ne change
-jamais.
+Qu'est-ce qu'on garde du profil ? **Un identifiant stable.** Le
+nom, l'avatar et le courriel changent ; le champ `id`, un entier attribué
+par GitHub, ne change jamais.
 
 D'où la table `account` (`server/data/schema.sql`) :
 
@@ -40,7 +44,7 @@ CREATE TABLE IF NOT EXISTS account (
 
 `github_id` est unique : deux connexions du même utilisateur retombent sur
 la même ligne. `findOrCreateAccount` (`server/src/repository/accounts.js`)
-fait les deux d'un coup :
+crée ou retrouve d'un seul coup :
 
 ```sql
 INSERT INTO account (github_id, login, name, avatar_url)
@@ -50,58 +54,21 @@ ON CONFLICT (github_id) DO UPDATE
 RETURNING *
 ```
 
-Deux choses à remarquer. **Il n'y a pas d'inscription** : la première
-connexion crée le compte, c'est tout. Et **le profil est rafraîchi à chaque
-fois** : GitHub est la source de vérité pour le login et l'avatar, pas nous.
+**Il n'y a pas d'inscription** : la première connexion crée le compte. Et
+**le profil est rafraîchi à chaque fois** : GitHub est la source de vérité
+pour le login et l'avatar, pas nous.
 
-Le `RETURNING *` donne `account.id`, notre clé à nous. C'est celle-là que
-`quiz.account_id` référence, pas le `github_id`. La différence paraît
-gratuite tant qu'il n'y a qu'un fournisseur ; elle cesse de l'être le jour
-où on ajoute Google, parce qu'un compte n'est alors plus une identité
-GitHub, mais une identité de Quiz M9 à laquelle une ou plusieurs identités
-externes sont rattachées.
-
-## Le fonctionnement de Quiz M9.
-
-Dans Quiz M9, **la session est un jeton signé, transporté par un cookie que
-l'API pose elle-même.**
-
-```
-quizm9_session=<{ accountId, exp } en base64url>.<signature HMAC>
-```
-
-### Pourquoi un cookie et pas `localStorage`
-
-La technique du jeton signé a été vue en 4D6, la recette était celle-ci :
-
-1. `POST /login` avec le mot de passe, le serveur répond un **JWT** ;
-2. `localStorage.setItem('token', jwt)` ;
-3. chaque appel ajoute l'en-tête `Authorization: Bearer <jwt>`.
-
-Ça marche parce que **tout passe par du `fetch` qu'on écrit soi-même**, dans
-le navigateur, après le chargement de la page. C'est l'hypothèse d'une
-application à page unique.
-
-Quiz M9 rend ses pages sur le serveur (semaine 4). Deux choses se cassent.
-
-**1. La première requête n'est pas un `fetch`.** Taper `/quizzes` dans la
-barre d'adresse, cliquer un lien, recharger : le navigateur demande un
-document HTML. Cette requête ne contient aucun code à nous, donc aucun
-en-tête qu'on aurait pu ajouter. Or c'est précisément à ce moment que le
-serveur doit décider quoi rendre : la liste des questionnaires, ou une
-redirection vers l'accueil.
-
-**2. `localStorage` n'existe pas sur le serveur.** Le `loader` de
-`client/app/root.jsx` tourne dans Node. Il n'y a ni `window`, ni
-`document`, ni `localStorage`. Le jeton serait dans un navigateur et le code
-qui en a besoin dans un processus, sans rien pour les relier.
+Le `RETURNING *` donne `account.id`, notre clé à nous. C'est elle que
+`quiz.account_id` référence et elle qui ira dans la session, pas le
+`github_id` : le jour où on ajoute Google, un compte n'est plus une identité
+GitHub, mais une identité de Quiz M9 à laquelle des identités externes sont
+rattachées.
 
 ## Le cookie
 
 Un cookie, c'est une paire nom/valeur que le serveur pose dans une réponse
 et que le navigateur **renvoie tout seul** dans chaque requête suivante vers
-le même domaine. Il n'y a rien à écrire côté client : ni `fetch`, ni
-en-tête, ni JavaScript.
+le même domaine.
 
 ```http
 ← HTTP/1.1 302 Found
@@ -112,87 +79,67 @@ en-tête, ni JavaScript.
   Cookie: quizm9_session=eyJhY2NvdW50SWQiOjEsImV4cCI6…
 ```
 
-C'est ce « tout seul » qui règle le problème 1 : la navigation elle-même,
-celle qui demande le document HTML, porte le cookie. Le `loader` sait donc
-qui est connecté avant d'avoir rendu quoi que ce soit.
+C'est ce « tout seul » qui rend la mémoire à HTTP, sans une ligne de
+JavaScript de notre part. Même la toute première requête, celle qui demande
+le document HTML quand on tape `/quizzes` dans la barre d'adresse, porte le
+cookie : le `loader` sait qui est connecté avant d'avoir rendu quoi que ce
+soit.
 
-Les attributs qui accompagnent le cookie ne sont pas des détails :
+`writeSession` (`server/src/session.js`) le pose avec quatre attributs importants :
 
 | Attribut | Ce qu'il change | Dans Quiz M9 |
 |---|---|---|
-| `HttpOnly` | invisible à `document.cookie` | oui |
+| `HttpOnly` | invisible à `document.cookie`, donc un XSS ne le vole pas | oui |
 | `SameSite` | quand le cookie part depuis un autre site | `Lax` |
-| `Secure` | envoyé seulement en HTTPS | absent en dev, obligatoire en production |
 | `Path` | le préfixe d'URL qui le reçoit | `/`, toutes les routes |
-| `Domain` | absent : le domaine exact qui l'a posé | absent |
-| `Max-Age` / `Expires` | quand le navigateur l'oublie ; absent, il meurt avec le navigateur | une semaine |
+| `Max-Age` | quand le navigateur l'oublie | une semaine |
+| `Secure` | envoyé seulement en HTTPS | absent en dev, obligatoire en production |
 
-Attention à la dernière ligne : `Max-Age` est une consigne donnée au
-**navigateur**, et le navigateur est chez l'utilisateur. Rien n'empêche de
-recopier la valeur du cookie avant la date et de la rejouer après. La
-véritable expiration est celle qui est à l'intérieur du jeton, signée, et
-que le serveur vérifie lui-même. `Max-Age` fait le ménage, `exp` fait la
-sécurité.
+`SameSite=Lax` veut dire : le cookie accompagne une navigation de premier
+niveau en `GET` (un lien cliqué depuis un autre site), mais pas un
+formulaire ou un `fetch` posté depuis un autre site. C'est la défense de
+base contre le **CSRF** (*cross-site request forgery*), où un site piégé
+déclenche une requête vers Quiz M9 dans un navigateur déjà connecté.
 
-### `SameSite`
-
-`SameSite` dit au navigateur s'il doit joindre le cookie à une requête
-**partie d'un autre site**. Trois valeurs :
-
-- `None` : toujours. C'est l'ancien comportement, et c'est exactement ce qui
-  rend le **CSRF** (*cross-site request forgery*) possible.
-- `Strict` : jamais. Même un clic sur un lien depuis un courriel arrive
-  déconnecté.
-- `Lax` : seulement si la requête est une **navigation de premier niveau**
-  (la barre d'adresse change) et une méthode sûre (`GET`).
+Attention à `Max-Age` : c'est une consigne donnée au **navigateur**, et le
+navigateur est chez l'utilisateur. Rien n'empêche de recopier la valeur du
+cookie avant la date et de la rejouer après. La véritable expiration est
+celle qui est à l'intérieur du jeton, signée, et que le serveur vérifie
+lui-même. `Max-Age` fait le ménage, `exp` fait la sécurité.
 
 ## Signer, pas chiffrer
 
 Le cookie est rangé dans un endroit que l'utilisateur contrôle entièrement.
-S'il contient `{"accountId":1,"exp":…}` en clair, il suffit d'ouvrir les
-outils de développement, d'écrire `2` à la place de `1` (ou de repousser la
-date) pour devenir quelqu'un d'autre.
-
-Quiz M9 le **signe** (`server/src/session.js`) :
+S'il contenait `{"accountId":1,"exp":…}` en clair, il suffirait d'écrire `2`
+à la place de `1` pour devenir quelqu'un d'autre. Quiz M9 le **signe** :
 
 ```
 quizm9_session=<JSON en base64url>.<HMAC-SHA256 de cette chaîne>
 ```
 
-Le base64url n'est pas du chiffrement, c'est un encodage. N'importe qui peut
-relire le contenu. La signature, elle, est un HMAC calculé avec
-`SESSION_SECRET`. Sans le secret, on ne peut pas la produire. Changez un
-caractère du contenu, et la signature attendue n'est plus la même :
-`verifySession` renvoie `{}`, et la requête est anonyme. Le serveur ne se fâche
-même pas, il ne reconnaît personne.
+Le base64url est un encodage, pas un chiffrement : n'importe qui relit le
+contenu. La signature, elle, est un HMAC calculé avec `SESSION_SECRET`.
+Changez un caractère du contenu et la signature attendue n'est plus la
+même : `verifySession` renvoie `{}`, et la requête est simplement anonyme.
 
-Quatre conséquences, toutes importantes.
+Trois conséquences :
 
-**On lit tout.** Ne mettez jamais dans une session quelque chose qui doit
-rester secret : pas de jeton GitHub, pas de mot de passe, pas de donnée
-privée. Signé ne veut pas dire caché.
+**Tout dans le cookie est public.** Jamais mettre le jeton GitHub, de mot de passe ou de donnée privée
+dans une session. Signé ne veut pas dire caché.
 
 **`SESSION_SECRET` est le seul verrou.** Qui l'obtient fabrique une session
 valide pour n'importe quel `accountId`, sans mot de passe et sans GitHub. Il
-vit dans `server/.env`, jamais dans le dépôt.
-
-**Changer le secret déconnecte tout le monde.** Toutes les signatures
-émises deviennent invalides d'un coup. C'est le levier d'urgence, et on
-verra plus bas que c'est à peu près le seul.
+vit dans `server/.env`, jamais dans le dépôt. Le changer invalide toutes les
+signatures émises, donc déconnecte tout le monde d'un coup.
 
 **La comparaison se fait en temps constant.** `timingSafeEqual` plutôt que
-`===` : une comparaison de chaînes ordinaire s'arrête au premier caractère
-qui diffère, et le temps qu'elle met trahit donc jusqu'où on avait juste.
-Avec assez d'essais, on reconstruit une signature octet par octet. C'est
-difficile à exploiter à travers un réseau, mais la bonne comparaison ne
-coûte rien.
+`===` : une comparaison ordinaire s'arrête au premier caractère qui diffère,
+et le temps qu'elle met trahit jusqu'où on avait juste.
 
 ## Ce qu'on met dedans
 
-`{ accountId, exp }`. Rien d'autre.
-
-`accountId` répond à « qui », `exp` à « jusqu'à quand » : la date, en
-millisecondes, après laquelle le jeton ne vaut plus rien.
+`{ accountId, exp }`. Rien d'autre. `accountId` répond à « qui », `exp` à
+« jusqu'à quand » :
 
 ```js
 const DUREE_MS = 7 * 24 * 60 * 60 * 1000; // une semaine
@@ -203,35 +150,28 @@ export function signSession(session) {
 }
 ```
 
-`signSession` l'ajoute lui-même : impossible d'émettre par distraction un
-jeton valable pour toujours. À la relecture, `verifySession` vérifie la
+`signSession` ajoute `exp` lui-même : impossible d'émettre par distraction
+un jeton valable pour toujours. À la relecture, `verifySession` vérifie la
 signature **puis** la date, et une session périmée redevient `{}`, comme une
 session absente.
 
-La tentation est d'y ajouter le login et l'avatar, pour que la barre de
-navigation n'ait pas à les chercher. Mauvaise idée : ces champs changent, et
-le cookie, lui, ne changerait pas. Un utilisateur qui renomme son compte
-GitHub verrait l'ancien nom jusqu'à sa prochaine connexion.
-
-Pire encore avec des droits ou un rôle. Retirer un droit ne doit pas
-dépendre du moment où l'utilisateur voudra bien se reconnecter.
+La tentation est d'ajouter le login et l'avatar, pour éviter un aller-retour
+à la base. Mauvaise idée : ces champs changent, le cookie ne changerait pas,
+et l'utilisateur qui se renomme verrait l'ancien nom jusqu'à sa prochaine
+connexion. Pire avec un rôle ou un droit : les retirer ne doit pas dépendre
+du moment où l'utilisateur voudra bien se reconnecter.
 
 > Dans le cookie, l'identité. Dans la base, tout ce qui peut changer.
 
-C'est pour ça que la barre de navigation passe par `GET /api/me` au lieu de
-lire le cookie : la réponse vient de la base, à jour.
+C'est pour ça que le client, pour afficher le login et l'avatar en haut de
+chaque page, appelle `GET /api/me` plutôt que de lire le cookie : la réponse
+vient de la base, à jour. Le prix est un `SELECT` par requête, sur une clé
+primaire.
 
-Deux raisons supplémentaires de faire court : un cookie est plafonné autour
-de 4 ko, et il repart dans **chaque** requête vers le domaine, y compris
-celles des images et des feuilles de style.
-
-Le prix à payer est un `SELECT` par requête. Sur une clé primaire, c'est le
-genre de coût qu'on accepte sans discuter.
-
-## Le même cookie, deux usages
+## Le même cookie pour le `state`
 
 Pendant le flux OAuth, il n'y a encore personne à retenir, et pourtant il
-faut déjà se souvenir d'une chose entre le départ et le retour : le `state`.
+faut se souvenir d'une chose entre le départ et le retour : le `state`.
 `server/src/auth.js` réutilise le même mécanisme.
 
 ```js
@@ -245,48 +185,29 @@ writeSession(res, { accountId: account.id });
 Le deuxième appel remplace le premier : le `state` disparaît du cookie, ce
 qui lui donne son usage unique gratuitement.
 
-## Révoquer : le prix de l'auto-portant
+## Ce que le jeton signé coûte : la révocation
 
-Le serveur ne garde rien. Il ne sait donc pas quelles sessions existent, et
-**ne peut pas en supprimer une**. « Se déconnecter de tous les appareils »,
-le bouton qu'on cherche quand un portable se fait voler, est impossible tel
-quel.
+Le serveur ne garde rien. Il ne sait donc pas quelles sessions existent et
+**ne peut pas en supprimer une**. `clearSession` efface le cookie **du
+navigateur qui le demande** ; une copie prise avant reste valide. « Se
+déconnecter de tous les appareils » est impossible tel quel.
 
-La déconnexion de Quiz M9 n'est pas une révocation : `clearSession` efface
-le cookie **du navigateur qui le demande**. Une copie prise avant reste
-valide.
+Quiz M9 s'en tient à la parade la moins chère, `exp` : la fenêtre se referme
+d'elle-même au bout d'une semaine. Un cran plus haut, une colonne
+`session_version` recopiée dans le jeton et comparée à chaque requête
+suffirait à invalider d'un coup toutes les sessions d'un compte ; un vrai
+registre des sessions donnerait la révocation exacte, au prix d'un registre
+à tenir.
 
-Les parades habituelles, par ordre de coût :
-
-- **Une date d'expiration dans le jeton** (`exp`), vérifiée à la lecture.
-  Ça ne révoque rien, mais la fenêtre se referme d'elle-même : un cookie
-  volé ne vaut plus rien passé le délai. C'est le minimum, et **Quiz M9 le
-  fait** : une semaine.
-- **Un numéro de version par compte** : une colonne `session_version`,
-  recopiée dans le jeton, comparée à chaque requête. L'incrémenter invalide
-  d'un coup toutes les sessions de ce compte, donc « se déconnecter
-  partout ». Un registre minimal, dans une requête qu'on faisait déjà.
-- **Un registre des sessions** : celui qu'on a écarté plus haut, avec la
-  révocation exacte, session par session, et le coût qui va avec.
-
-Le choix de la durée est un arbitrage, et il n'a pas de bonne réponse. Une
-heure, et l'utilisateur se reconnecte sans arrêt. Un mois, et un cookie
-volé sert pendant un mois. Les vrais sites contournent le dilemme avec deux
-jetons : un jeton d'accès de quelques minutes, et un **jeton de
-renouvellement** de longue durée, gardé dans un registre, lui, et donc
-révocable. C'est exactement le compromis que GitHub vous applique quand il
-ne vous redemande pas votre mot de passe tous les matins.
-
-Quiz M9 s'arrête à la première parade : `exp`, une semaine, sans
-renouvellement. C'est un choix assumé pour un exercice. En production, la
-question « comment je déconnecte quelqu'un de force ? » se pose avant
-d'écrire la première ligne.
+Une semaine, c'est un arbitrage sans bonne réponse : une heure et on se
+reconnecte sans arrêt, un mois et un cookie volé sert un mois. Dans une
+application plus sérieuse que Quiz M9, la question « comment je déconnecte
+quelqu'un de force ? » se pose avant d'écrire la première ligne.
 
 ## Où vit la session
 
-Dans l'**API**, pas dans React Router. Une requête à l'API sans cookie
-valide est anonyme, d'où qu'elle vienne : d'un `loader`, du navigateur, ou
-de `curl` sur le port 3000.
+Dans l'**API**, pas dans React Router. Une requête sans cookie valide est
+anonyme, d'où qu'elle vienne : d'un `loader`, du navigateur, ou de `curl`.
 
 ```bash
 curl -i -X POST http://localhost:3000/api/quizzes \
@@ -294,10 +215,9 @@ curl -i -X POST http://localhost:3000/api/quizzes \
 ```
 
 `401`. Le client peut cacher un bouton, ça n'empêche personne d'appeler la
-route. **L'autorisation se décide là où sont les données**, et la semaine 6
-s'appuiera là-dessus.
-
-Une seule fonction fait le pont entre le cookie et le compte :
+route : **l'autorisation se décide là où sont les données**. Une seule
+fonction fait le pont entre le cookie et le compte, et toute route protégée
+commence par elle :
 
 ```js
 export async function currentAccount(req) {
@@ -307,29 +227,24 @@ export async function currentAccount(req) {
 }
 ```
 
-Une route protégée commence donc toujours pareil : `currentAccount(req)`,
-401 si c'est `null`.
-
 ## Le cookie voyage
 
 Le navigateur ne parle qu'au client (5173), qui relaie `/api` vers l'API
-(3000). Mais une même requête peut suivre deux chemins, et ils ne se
-comportent pas pareil :
+(3000). Mais une même requête peut suivre deux chemins :
 
 ```
 navigateur ──► client 5173 ──(relais /api)────► API 3000    un fetch du navigateur
 navigateur ──► client 5173 ──(loader/action)──► API 3000    le rendu côté serveur
 ```
 
-**Premier chemin.** Le navigateur joint le cookie lui-même. En
-développement, le relais de Vite transmet `Cookie` et `Set-Cookie` ; en
-production, `client/server.js` le fait explicitement.
+**Premier chemin.** Le navigateur joint le cookie lui-même. Le relais de
+Vite transmet `Cookie` et `Set-Cookie` ; en production, `client/server.js`
+le fait explicitement.
 
-**Deuxième chemin.** Un `loader` ou une `action` tourne sur le serveur du
-client, dans Node. Son `fetch` part d'un processus qui n'est pas un
-navigateur et qui n'a donc aucun cookie. Il faut prendre celui de la requête
-entrante et le recopier à la main, ce que fait `apiFetch`
-(`client/app/api-url.js`) :
+**Deuxième chemin.** Un `loader` ou une `action` tourne dans Node. Son
+`fetch` part d'un processus qui n'est pas un navigateur et n'a donc aucun
+cookie : il faut recopier celui de la requête entrante, ce que fait
+`apiFetch` (`client/app/api-url.js`) :
 
 ```js
 export function apiFetch(request, path, init = {}) {
@@ -338,28 +253,6 @@ export function apiFetch(request, path, init = {}) {
 }
 ```
 
-Symptôme quand on oublie : `http://localhost:3000/api/me` répond dans un
-onglet, mais la page se croit déconnectée. C'est un `fetch` au lieu d'un
-`apiFetch`.
-
-Dans l'autre sens aussi, il faut recopier. À la déconnexion, l'API met un
-`Set-Cookie` d'effacement dans **sa** réponse, celle qui est adressée au
-serveur du client. Le cookie à effacer étant dans le navigateur, l'`action`
-doit recopier cet en-tête dans la réponse qu'elle lui renvoie.
-
-## Le chemin complet
-
-De bout en bout, une fois le profil obtenu :
-
-1. `findOrCreateAccount` : le `github_id` devient une ligne `account`, avec
-   notre `id` à nous.
-2. `writeSession(res, { accountId })` : `signSession` ajoute `exp`, signe le
-   tout et le pose dans `Set-Cookie`, avec `HttpOnly`, `SameSite=Lax`,
-   `Max-Age` et `Path=/`.
-3. Redirection vers `/quizzes`. Le navigateur suit, et joint le cookie.
-4. Le serveur du client rend la page ; le `loader` de la racine appelle
-   `GET /api/me` avec `apiFetch`, cookie compris.
-5. L'API vérifie la signature, puis `exp`, lit `accountId`, charge le
-   compte, répond le profil. La barre de navigation affiche l'avatar.
-6. À chaque requête suivante, les étapes 3 à 5 recommencent. Plus personne
-   ne parle à GitHub : le jeton d'accès a servi une fois, puis a été oublié.
+Le retour se recopie aussi : à la déconnexion, le `Set-Cookie` d'effacement
+arrive dans la réponse adressée au serveur du client, et l'`action` doit le
+replacer dans la sienne pour qu'il atteigne le navigateur.
