@@ -1,0 +1,166 @@
+---
+sidebar_position: 13
+sidebar_label: 12. Qui peut faire quoi
+description: "Quiz M9, semaine 6 : les intergiciels d'autorisation, le questionnaire réservé à son auteur, la partie à son animateur, et l'administrateur."
+---
+
+# Exercice 12 : qui peut faire quoi
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+Notes à garder ouvertes : [Rôles et autorisation](/notes_de_cours/auth/autorisation)
+et [La session](/notes_de_cours/auth/session).
+
+## Jalon 0 : partir du bon pied
+
+```bash
+git checkout main
+git pull
+git checkout -b sem-06
+npm install
+docker compose down -v          # le schéma a changé : base neuve
+docker compose up -d postgres
+npm run dev
+```
+
+**Sans Docker** : supprimez `server/data/quizm9.db` à la place du `down -v`.
+
+Trois colonnes sont arrivées dans `server/data/schema.sql` :
+`account.is_admin`, `quiz.description` et `game.account_id` (l'animateur
+d'une partie). Le fichier `server/src/authorization.js` contient trois
+intergiciels qui, pour l'instant, laissent tout passer.
+
+**Constater le problème.** Connectez-vous, créez un questionnaire avec une
+question, puis dans un autre navigateur (ou une fenêtre privée, sans
+session) :
+
+```bash
+curl http://localhost:3000/api/quizzes/4
+```
+
+Les bonnes réponses, à n'importe qui. Lancez une partie depuis le
+catalogue, notez son code, puis toujours sans session :
+
+```bash
+curl -X POST http://localhost:3000/api/games/CODE/next
+```
+
+La partie avance. Sous PowerShell, écrivez `curl.exe`.
+
+```bash
+npm test
+```
+
+**Vérifier.** `fail 0`, et des `todo` dans `authorization.test.js` : ce
+sont les vôtres.
+
+## Jalon 1 : exiger un compte
+
+- **Fichiers** : `server/src/authorization.js`, `server/src/app.js`
+
+1. Écrivez `requireAccount` : 401 sans compte, sinon `req.account` puis
+   `next()`. La note en donne le modèle.
+2. Dans `app.js`, `GET /api/me/quizzes` et `POST /api/quizzes` vérifient
+   encore la session à la main. Remplacez ces lignes par `requireAccount`
+   placé devant la route, et utilisez `req.account`.
+3. Écrivez le test du jalon 1 dans `authorization.test.js`. Il échoue tant
+   que le jalon 2 n'est pas fait : c'est normal, `GET /api/quizzes/:id` n'a
+   pas encore d'intergiciel.
+
+**Vérifier.** Les tests de la semaine 5 passent toujours : `requireAccount`
+fait exactement ce que faisaient les lignes retirées.
+
+## Jalon 2 : son questionnaire, pas celui des autres
+
+- **Fichiers** : `server/src/authorization.js`, `server/src/app.js`
+
+1. Écrivez `requireQuizAuthor`. Il retrouve le questionnaire de
+   `req.params.id` avec `repository.getQuizWithQuestions` : 404 s'il n'existe
+   pas, 403 si son `accountId` n'est pas `req.account.id`, sinon
+   `req.quiz` puis `next()`.
+2. Placez `requireAccount, requireQuizAuthor` devant **toutes** les routes
+   de l'auteur qui ont un `:id` : `GET /api/quizzes/:id`,
+   `GET /api/quizzes/:id/games`, `PATCH /api/quizzes/:id`,
+   `POST /api/quizzes/:id/questions`,
+   `DELETE /api/quizzes/:id/questions/:questionId`.
+3. Dans ces routes, les vérifications « 404 si le questionnaire n'existe
+   pas » sont maintenant faites par l'intergiciel : retirez-les, et
+   utilisez `req.quiz`.
+4. Les trois tests du jalon 2.
+
+**Vérifier.** Le `curl` du jalon 0 répond 401. Connecté avec un autre
+compte GitHub (celui d'un voisin), `/quizzes/4` affiche « Ce questionnaire
+n’est pas le vôtre. ». Les questionnaires de démonstration (1 à 3) n'ont
+pas d'auteur : plus personne ne les ouvre, jusqu'au jalon 4.
+
+## Jalon 3 : la partie et son animateur
+
+- **Fichiers** : `server/src/authorization.js`, `server/src/app.js`
+
+1. `POST /api/games` : `requireAccount`, puis
+   `createGame(quizId, req.account.id)`. La partie retient son animateur
+   dans `game.account_id`.
+2. Écrivez `requireGameHost`, sur le modèle de `requireQuizAuthor` : la
+   partie de `req.params.code` (`repository.findGameByCode`), 404 ou 403,
+   sinon `req.game`. Attention, c'est une ligne brute de la base :
+   `account_id`, pas `accountId`.
+3. `POST /api/games/:code/next` : `requireAccount, requireGameHost`, et la
+   route utilise `req.game` au lieu de `requestedGame`.
+4. Les deux tests du jalon 3.
+
+**Vérifier.** Le deuxième `curl` du jalon 0 répond 401. Une partie
+complète se joue toujours à deux navigateurs : l'animateur connecté avance,
+les joueurs sans compte rejoignent et répondent.
+
+## Jalon 4 : l'administrateur
+
+1. Donnez-vous le rôle :
+
+   ```bash
+   docker compose exec postgres psql -U quizm9
+   ```
+
+   ```sql
+   UPDATE account SET is_admin = TRUE WHERE login = 'votre-login-github';
+   ```
+
+2. Dans `authorization.js`, une fonction `isOwnerOrAdmin(account, ownerId)`
+   que `requireQuizAuthor` et `requireGameHost` appellent au lieu de
+   comparer eux-mêmes.
+3. Le test du jalon 4 : `api.login('root', { admin: true })`.
+
+**Vérifier.** Sans vous reconnecter, `/quizzes/1` s'ouvre. Remettez
+`is_admin` à `FALSE` : la page suivante vous refuse, sans déconnexion. C'est
+l'avantage d'un rôle lu dans la base plutôt que dans le cookie. `npm test` :
+aucun `todo` dans `authorization.test.js`, aucun `fail`.
+
+## Pour aller plus loin
+
+La section « Déconnecter de force » de la note : une colonne
+`session_version`, et un bouton « Me déconnecter partout ».
+
+## Et le projet 1 ?
+
+Posez-vous les mêmes questions pour votre jeu d'échecs, route par route :
+qui peut jouer un coup dans cette partie ? Qui peut abandonner ? Qui peut
+voir une partie en cours ? Chaque réponse est un intergiciel, ou un test
+dans une route, et un test d'intégration.
+
+## En panne ?
+
+- `column "is_admin" does not exist` : la base date d'avant la semaine 6.
+  `docker compose down -v`, puis `up -d postgres` (sans Docker : supprimez
+  `server/data/quizm9.db`).
+- `Cannot read properties of undefined (reading 'id')` dans un
+  intergiciel : `requireQuizAuthor` est placé avant `requireAccount`, ou
+  `requireAccount` ne remplit pas `req.account`.
+- `Cannot set headers after they are sent` : un `res.status(...)` sans
+  `return`, suivi d'un `next()`.
+- Tout est refusé, même à l'auteur : comparaison entre `account_id` et
+  `accountId`, dont l'un vaut `undefined`.
+- La route ne répond jamais : l'intergiciel n'appelle pas `next()` quand
+  tout va bien.

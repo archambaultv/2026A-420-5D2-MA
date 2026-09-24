@@ -193,6 +193,81 @@ quand la ligne n'existe pas.
 
 :::
 
+### Une requête qui compte
+
+Le catalogue affiche chaque questionnaire avec son nombre de questions :
+un `LEFT JOIN`, un `COUNT` et un `GROUP BY`.
+
+```js title="server/src/repository/quizzes.js"
+export async function listQuizzes() {
+  const { rows } = await pool.query(
+    `SELECT quiz.id, quiz.title, COUNT(question.id) AS "questionCount"
+       FROM quiz
+       LEFT JOIN question ON question.quiz_id = quiz.id
+      GROUP BY quiz.id
+      ORDER BY quiz.id`,
+  );
+  return rows;   // [{ id: 1, title: '…', questionCount: 5 }, …]
+}
+```
+
+- **`LEFT JOIN`** garde les questionnaires sans question : `COUNT(question.id)`
+  y vaut 0. Avec un `JOIN` ordinaire, ils disparaîtraient.
+- **`COUNT(question.id)`** et non `COUNT(*)` : on compte les questions
+  trouvées, pas les lignes produites par la jointure.
+- **`AS "questionCount"`** : les colonnes de la base sont en `snake_case`,
+  le JSON de l'API en `camelCase`. Les guillemets **doubles** comptent :
+  sans eux, PostgreSQL met le nom en minuscules et le client reçoit
+  `questioncount`. Même chose pour `created_at AS "createdAt"`.
+- Les guillemets simples, eux, sont pour les chaînes : `'lobby'`.
+
+Avec un paramètre, le `WHERE` va avant le `GROUP BY` :
+
+```sql
+SELECT …
+  FROM game
+  LEFT JOIN player ON player.game_id = game.id
+ WHERE game.quiz_id = $1
+ GROUP BY game.id
+ ORDER BY game.created_at DESC
+```
+
+### La route qui l'appelle, et son test
+
+```js title="server/src/app.js"
+app.get('/api/quizzes/:id', async (req, res) => {
+  const quiz = await repository.getQuizWithQuestions(Number(req.params.id));
+  if (!quiz) {
+    return res.status(404).json({ error: 'Questionnaire introuvable.' });
+  }
+  res.status(200).json(quiz);
+});
+```
+
+`req.params.id` est une chaîne : `Number(...)` la convertit avant de la
+passer à la base. Une fonction ajoutée à `quizzes.js` doit aussi être
+exportée par `repository/index.js`, sinon `repository.maFonction` vaut
+`undefined`.
+
+Un test d'intégration prépare ses données **par l'API**, comme le ferait le
+client, puis vérifie la réponse :
+
+```js title="server/test/quizzes.test.js"
+test('une partie créée apparaît dans l’état public', async () => {
+  const quizId = await createQuiz('Joué');                                 // helper du fichier
+  await api.request('POST', `/api/quizzes/${quizId}/questions`, question(), session);
+  const { data: game } = await api.request('POST', '/api/games', { quizId }, session);
+
+  const { status, data } = await api.request('GET', `/api/games/${game.code}`);
+  assert.equal(status, 200);
+  assert.equal(data.state, 'lobby');
+  assert.equal(data.players.length, 0);
+});
+```
+
+`{ data: game }` renomme en déstructurant : le champ `data` de la réponse
+devient la variable `game`.
+
 ### La transaction, sur une seule connexion
 
 `BEGIN` et `COMMIT` doivent partir sur la **même** connexion, sinon ils

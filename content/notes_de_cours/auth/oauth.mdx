@@ -215,6 +215,113 @@ identité, pas l'accès aux dépôts. Demandez le minimum, toujours.
 retiendra ensuite qui est connecté. Il n'y a encore personne à retenir à
 l'étape 1, mais le mécanisme est déjà en place.
 
+## Le code, étape par étape
+
+### `fetch` côté serveur
+
+Les étapes 3a et 3b sont deux appels HTTP que **le serveur** fait lui-même.
+Node a le même `fetch` que le navigateur :
+
+```js
+const response = await fetch('https://exemple.com/api/chose', {
+  method: 'POST',                                      // GET par défaut
+  headers: { 'content-type': 'application/json' },     // ce qu'on envoie
+  body: JSON.stringify({ a: 1 }),                      // le corps, en texte
+});
+const data = await response.json();                    // le corps de la réponse, en objet
+```
+
+Deux `await` : un pour la réponse, un pour lire son corps. `response.ok`
+vaut `true` pour un statut 200 à 299.
+
+### Étape 1 : partir chez GitHub
+
+```js title="server/src/auth.js"
+auth.get('/api/auth/github', (req, res) => {
+  const state = randomBytes(16).toString('hex');   // aléatoire, imprévisible
+  writeSession(res, { state });                    // la copie du state, dans le cookie
+
+  const url = new URL('https://github.com/login/oauth/authorize');
+  url.searchParams.set('client_id', CLIENT_ID);
+  url.searchParams.set('redirect_uri', CALLBACK_URL);
+  url.searchParams.set('state', state);
+  res.redirect(url.href);                          // 302 : le navigateur y va
+});
+```
+
+`URL` et `searchParams` construisent l'adresse et encodent les valeurs à
+notre place.
+
+### Étape 2 : vérifier le retour
+
+```js
+auth.get('/api/auth/callback', async (req, res) => {
+  const { code, state } = req.query;        // ?code=…&state=…
+  const session = readSession(req);         // le state gardé à l'étape 1
+  if (!code || !state || state !== session.state) {
+    return res.status(400).json({ error: 'Retour OAuth invalide (state).' });
+  }
+  // suite : 3a, 3b, 4
+});
+```
+
+### Étape 3a : le code contre un jeton
+
+```js
+const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+  method: 'POST',
+  headers: { accept: 'application/json', 'content-type': 'application/json' },
+  body: JSON.stringify({
+    client_id: CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+    code,
+    redirect_uri: CALLBACK_URL,
+  }),
+});
+const { access_token: token } = await tokenResponse.json();
+if (!token) {
+  return res.status(400).json({ error: 'GitHub a refusé le code.' });
+}
+```
+
+Sans `accept: application/json`, GitHub répond en format formulaire
+(`access_token=…&scope=…`) et `.json()` échoue. Un code déjà utilisé ou
+expiré donne une réponse **200** avec `{ "error": "bad_verification_code" }` :
+c'est l'absence d'`access_token` qu'il faut tester, pas le statut.
+
+`{ access_token: token }` est une déstructuration qui renomme : on lit le
+champ `access_token` et on le range dans la variable `token`.
+
+### Étape 3b : le jeton contre le profil
+
+```js
+const userResponse = await fetch('https://api.github.com/user', {
+  headers: {
+    authorization: `Bearer ${token}`,
+    accept: 'application/vnd.github+json',
+    'user-agent': 'quiz-m9',          // exigé par l'API de GitHub
+  },
+});
+const user = await userResponse.json();   // { id, login, name, avatar_url, … }
+```
+
+### Étape 4 : notre compte, notre session
+
+```js
+const account = await repository.findOrCreateAccount({
+  githubId: user.id,
+  login: user.login,
+  name: user.name,
+  avatarUrl: user.avatar_url,
+});
+writeSession(res, { accountId: account.id });
+res.redirect('/quizzes');
+```
+
+Le jeton n'est rangé nulle part : il a servi une fois, il est oublié. La
+suite, `findOrCreateAccount` et `writeSession`, est expliquée dans [La
+session](session).
+
 Le profil est en main, GitHub a fini son travail. L'autorisation déléguée a
 servi, une fois, à établir une identité. Que faire de cette identité ? C'est le
 sujet de la page suivante : [La session](session).

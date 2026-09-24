@@ -227,6 +227,50 @@ export async function currentAccount(req) {
 }
 ```
 
+### Une route réservée aux comptes connectés
+
+Le motif est toujours le même : demander le compte, répondre 401 s'il n'y
+en a pas, sinon s'en servir.
+
+```js title="server/src/app.js"
+app.post('/api/quizzes', async (req, res) => {
+  const account = await currentAccount(req);
+  if (!account) {
+    return res.status(401).json({ error: 'Connectez-vous pour créer un questionnaire.' });
+  }
+  // … validation du titre …
+  const id = await repository.createQuiz(title, account.id);   // l'auteur, c'est lui
+  res.status(201).json({ id, title });
+});
+```
+
+L'auteur vient **de la session**, jamais du corps de la requête. Un
+`{ "title": "…", "accountId": 7 }` envoyé par le client serait un mensonge
+possible ; `account.id`, lui, est signé.
+
+### Ne lire que ce qui est à soi
+
+Le filtre se fait en SQL, avec l'identifiant du compte en paramètre :
+
+```js title="server/src/repository/quizzes.js"
+export async function listQuizzesForAccount(accountId) {
+  const { rows } = await pool.query(
+    `SELECT quiz.id, quiz.title, COUNT(question.id) AS "questionCount"
+       FROM quiz
+       LEFT JOIN question ON question.quiz_id = quiz.id
+      WHERE quiz.account_id = $1
+      GROUP BY quiz.id
+      ORDER BY quiz.id`,
+    [accountId],
+  );
+  return rows;
+}
+```
+
+C'est `listQuizzes` avec une ligne de plus, le `WHERE`. Filtrer dans la
+base plutôt qu'en JavaScript (`rows.filter(...)`) : on ne lit pas les
+questionnaires des autres pour les jeter ensuite.
+
 ## Le cookie voyage
 
 Le navigateur ne parle qu'au client (5173), qui relaie `/api` vers l'API
@@ -256,3 +300,56 @@ export function apiFetch(request, path, init = {}) {
 Le retour se recopie aussi : à la déconnexion, le `Set-Cookie` d'effacement
 arrive dans la réponse adressée au serveur du client, et l'`action` doit le
 replacer dans la sienne pour qu'il atteigne le navigateur.
+
+### La déconnexion, recopiée jusqu'au navigateur
+
+```js title="client/app/routes/logout.jsx"
+import { redirect } from 'react-router';
+import { apiFetch } from '../api-url.js';
+
+export async function action({ request }) {
+  const response = await apiFetch(request, '/api/auth/logout', { method: 'POST' });
+  return redirect('/', {
+    headers: { 'set-cookie': response.headers.get('set-cookie') ?? '' },
+  });
+}
+```
+
+`redirect(url, { headers })` ajoute des en-têtes à la réponse de
+redirection. Sans cette ligne, l'API a bien effacé le cookie... dans une
+réponse que seul le serveur du client a vue.
+
+## Tester avec une session
+
+Un test ne peut pas passer par GitHub. `api.login()` (`server/test/helpers.js`)
+crée un compte de test et **signe lui-même** un cookie avec la clé de test :
+c'est exactement ce que fait `writeSession`, sans le flux OAuth. Le cookie
+se passe en quatrième argument de `api.request` :
+
+```js title="server/test/quizzes.test.js"
+let api;
+let session;
+before(async () => {
+  api = await startServer();
+  session = await api.login('alice');
+});
+
+test('créer un questionnaire sans être connecté est refusé (401)', async () => {
+  const { status } = await api.request('POST', '/api/quizzes', { title: 'Capitales' });
+  assert.equal(status, 401);                    // pas de 4e argument : anonyme
+});
+
+test('GET /api/me/quizzes ne montre que les questionnaires de l’auteur', async () => {
+  const bob = await api.login('bob');           // un deuxième compte
+  await api.request('POST', '/api/quizzes', { title: 'Celui de Bob' }, bob);
+  await api.request('POST', '/api/quizzes', { title: 'Celui d’Alice' }, session);
+
+  const { data } = await api.request('GET', '/api/me/quizzes', undefined, bob);
+  assert.ok(data.some((quiz) => quiz.title === 'Celui de Bob'));
+  assert.ok(data.every((quiz) => quiz.title !== 'Celui d’Alice'));
+});
+```
+
+`undefined` en troisième argument : un `GET` n'a pas de corps.
+`some` (au moins un) et `every` (tous) vérifient la liste sans dépendre de
+l'ordre ni des questionnaires créés par les autres tests du fichier.

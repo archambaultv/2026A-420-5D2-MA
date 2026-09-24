@@ -1,0 +1,155 @@
+---
+sidebar_position: 3
+sidebar_label: Le CSRF
+description: "Un site piégé qui agit au nom d'un utilisateur connecté : la suppression de questionnaire par lien GET dans Quiz M9, SameSite=Lax, et pourquoi GET ne doit rien modifier."
+---
+
+# Le CSRF
+
+La semaine 6 ajoute un bouton « Supprimer » à la page « Mes
+questionnaires ». Dans la version à corriger, c'est un simple lien :
+
+```jsx title="client/app/routes/quizzes.jsx (version vulnérable)"
+<a className="button secondary" href={`/api/quizzes/${quiz.id}/delete`}>Supprimer</a>
+```
+
+et l'API le sert avec un `GET` :
+
+```js title="server/src/app.js (version vulnérable)"
+app.get('/api/quizzes/:id/delete', async (req, res) => {
+  // ... vérifie le compte, l'auteur, puis supprime
+});
+```
+
+C'est pratique, et c'est la faille. Un `GET`, c'est ce que déclenche
+n'importe quel lien, n'importe quelle image, sur **n'importe quel site**.
+
+## Le mécanisme
+
+**CSRF** veut dire *cross-site request forgery* : un autre site fait faire à
+votre navigateur une requête vers Quiz M9, **avec votre cookie de session**,
+sans que vous l'ayez voulu.
+
+Le cookie de session voyage tout seul (voir [La
+session](/notes_de_cours/auth/session)). Le navigateur l'attache à **toute**
+requête vers le domaine de Quiz M9, peu importe d'où part la requête. Donc
+si une page d'un autre site pointe vers une adresse de Quiz M9 qui
+**modifie** des données, la modification part authentifiée comme vous.
+
+Le dépôt contient `attacks/csrf-trap.js`, un petit serveur qui joue le site
+piégé. On lui donne l'id d'un questionnaire à détruire :
+
+```bash
+node attacks/csrf-trap.js 7        # 7 : l'id d'un de vos questionnaires
+```
+
+Il sert alors une page d'apparence anodine (« Vous avez gagné un iPad ! »).
+Connecté à Quiz M9 dans le même navigateur, ouvrez-la :
+
+```text
+http://127.0.0.1:8080/
+```
+
+En arrière-plan, un `location.href` envoie votre navigateur sur l'URL de
+suppression (un `GET`), avec votre cookie de session attaché tout seul. Le
+questionnaire 7 disparaît, sans que vous ayez cliqué sur « Supprimer ». (Sur
+`127.0.0.1` et non `localhost` : voir plus bas pourquoi.)
+
+Le point clé : le site piégé **ne lit jamais** la réponse de Quiz M9. La
+politique de même origine du navigateur l'en empêche. Mais il n'a pas besoin
+de la lire : il lui suffit de **déclencher** l'action. Un `GET` qui supprime
+est donc déclenchable par un lien sur le premier site venu.
+
+## Deux défenses, ensemble
+
+### 1. Le verbe HTTP dit la vérité
+
+> **Un `GET` ne modifie jamais rien. Modifier, c'est `POST`, `PATCH` ou
+> `DELETE`.**
+
+Ce n'est pas une convention de style : c'est une frontière de sécurité. Un
+`GET` est déclenché par un simple lien ou une image. Réserver les
+modifications aux autres verbes retire déjà toute l'attaque par lien.
+
+Côté API, la suppression devient un `DELETE` :
+
+```js title="server/src/app.js (corrigé)"
+app.delete('/api/quizzes/:id', requireAccount, requireQuizAuthor, async (req, res) => {
+  await repository.deleteQuiz(req.quiz.id);
+  res.status(200).json({});
+});
+```
+
+Côté client, le lien devient un formulaire, envoyé par l'`action` qui
+appelle `DELETE` :
+
+```jsx title="client/app/routes/quizzes.jsx (corrigé)"
+{/* Un formulaire POST, pas un lien : supprimer modifie les données. */}
+<Form method="post">
+  <input type="hidden" name="intent" value="delete" />
+  <input type="hidden" name="quizId" value={quiz.id} />
+  <button className="secondary">Supprimer</button>
+</Form>
+```
+
+### 2. `SameSite=Lax` sur le cookie
+
+Le cookie de session de Quiz M9 est déjà posé avec `SameSite=Lax` (voir [La
+session](/notes_de_cours/auth/session)) :
+
+```js title="server/src/session.js"
+res.cookie(COOKIE_NAME, signSession(session), {
+  httpOnly: true,
+  sameSite: 'lax', // pas envoyé par un formulaire posté depuis un autre site
+  // ...
+});
+```
+
+`Lax` veut dire : le navigateur envoie le cookie sur une navigation de
+premier niveau en `GET` (un lien cliqué), **mais pas** sur un `POST`, un
+`DELETE` ou un `fetch` déclenché depuis un autre site. Une fois la
+suppression passée en `DELETE`, même une requête forgée depuis un site piégé
+part **sans** le cookie, donc anonyme, donc refusée en 401.
+
+Le `csrf-trap.js` sert justement une seconde page pour l'essayer, un
+formulaire qui s'envoie tout seul en `POST` :
+
+```text
+http://127.0.0.1:8080/formulaire
+```
+
+Sur la version vulnérable, elle ne fait rien (le client attend un `GET`).
+Après correction, elle vise bien le `DELETE`, mais `SameSite=Lax` retient le
+cookie : la requête arrive anonyme et Quiz M9 la refuse. La suppression par
+lien, elle, avait déjà été retirée par le bon verbe.
+
+Les deux défenses se complètent. Le bon verbe HTTP retire l'attaque par
+lien ; `SameSite=Lax` bloque la requête forgée qui tenterait quand même un
+`DELETE`.
+
+## Un piège d'origine à connaître
+
+Pour le navigateur, deux adresses sont le **même site** si elles partagent
+le même domaine, **peu importe le port**. `localhost:5173` et
+`localhost:3000` sont le même site ; une page servie sur `localhost:8080` le
+serait aussi. Pour démontrer une vraie attaque inter-sites en local, le
+`csrf-trap.js` écoute donc sur `127.0.0.1`, que le navigateur traite comme
+un **autre** site que `localhost`. C'est un détail de laboratoire, mais il
+explique pourquoi la démonstration utilise `127.0.0.1` et pas `localhost`.
+
+## Et les autres modifications ?
+
+Créer un questionnaire, ajouter une question, avancer une partie : toutes
+ces routes sont déjà des `POST` ou des `DELETE`, protégées par
+`SameSite=Lax`. La suppression par lien `GET` était la seule brèche, ajoutée
+pour la démonstration. La règle « un `GET` ne modifie rien » les couvre
+toutes.
+
+## Au-delà de `SameSite`
+
+`SameSite=Lax` est aujourd'hui le défaut des navigateurs et suffit pour Quiz
+M9. Les applications qui doivent viser plus large (vieux navigateurs,
+requêtes inter-sites légitimes) ajoutent un **jeton anti-CSRF** : une valeur
+imprévisible que le serveur place dans chaque formulaire et revérifie à la
+réception. Un site tiers ne peut pas la deviner. Le principe reste le même :
+prouver que la requête vient bien de **notre** page, pas d'une page piégée.

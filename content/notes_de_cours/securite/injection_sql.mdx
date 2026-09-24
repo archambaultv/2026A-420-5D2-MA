@@ -1,0 +1,125 @@
+---
+sidebar_position: 1
+sidebar_label: L'injection SQL
+description: "Quand le texte tapé par l'utilisateur devient du SQL : la recherche du catalogue de Quiz M9, la faille, et les paramètres de requête qui la ferment."
+---
+
+# L'injection SQL
+
+Le catalogue de Quiz M9 a un champ de recherche. Chaque frappe appelle `GET
+/api/quizzes?q=texte`, et le repository cherche les titres qui contiennent ce
+texte à l'aide d'une requête SQL.
+
+```js title="server/src/repository/quizzes.js (version vulnérable)"
+export async function searchQuizzes(text) {
+  const { rows } = await pool.query(
+    `SELECT id, title, description,
+            (SELECT COUNT(*) FROM question WHERE question.quiz_id = quiz.id) AS "questionCount"
+       FROM quiz
+      WHERE title ILIKE '%${text}%' ORDER BY id`,
+  );
+  return rows;
+}
+```
+
+La faille est dans le `${text}` : **le texte de l'utilisateur est collé dans le
+SQL**, et la base ne distingue pas ce que nous avons écrit de ce qu'il a tapé.
+
+## Le mécanisme
+
+Cherchez ceci dans le champ :
+
+```text
+' UNION SELECT id, login, name, github_id FROM account --
+```
+
+Le `${text}` recopie ce texte dans la requête, qui devient :
+
+```sql
+WHERE title ILIKE '%' UNION SELECT id, login, name, github_id FROM account --%' ORDER BY id
+```
+
+L'apostrophe ferme la chaîne, `UNION SELECT` recolle à la réponse les
+colonnes d'une **autre** table, et `--` fait passer la fin (`%' ORDER BY id`)
+en commentaire pour que l'ensemble reste valide. Les quatre colonnes du
+`UNION` prennent les places de `id`, `title`, `description` et
+`questionCount` : la base ne demande jamais si elles viennent bien de `quiz`.
+
+**Dans la page catalogue**, la ligne volée s'affiche comme un questionnaire :
+le `login` en titre, le `github_id` en nombre de questions. Mais l'attaquant
+n'a pas besoin du navigateur. La faille est dans l'API ; il l'interroge
+directement, et lit la réponse brute :
+
+```bash
+curl -G http://localhost:3000/api/quizzes \
+  --data-urlencode "q=' UNION SELECT id, login, name, github_id FROM account --"
+```
+
+```json
+[{ "id": 1, "title": "prof-quizm9", "description": "Vincent A.", "questionCount": 583231 }, ...]
+```
+
+Le `title` est un `login`, le `questionCount` un identifiant GitHub. En
+choisissant d'autres colonnes (`is_admin`, par exemple), on lit la table
+`account` en entier.
+
+:::warning
+
+Le danger ne s'arrête pas à la lecture : selon la requête détournée, une
+injection peut aussi modifier ou effacer des données.
+
+:::
+
+## La correction : des paramètres, pas de la concaténation
+
+La base doit recevoir la requête et les valeurs **séparément**. C'est
+exactement à ça que servent les `$1`, `$2` déjà utilisés partout ailleurs
+dans le repository :
+
+```js title="server/src/repository/quizzes.js (corrigé)"
+export async function searchQuizzes(text) {
+  // Les % font partie de la VALEUR : ce sont les jokers de ILIKE, pas du SQL.
+  const { rows } = await pool.query(
+    `SELECT id, title, description,
+            (SELECT COUNT(*) FROM question WHERE question.quiz_id = quiz.id) AS "questionCount"
+       FROM quiz
+      WHERE title ILIKE $1 ORDER BY id`,
+    [`%${text}%`],
+  );
+  return rows;
+}
+```
+
+La valeur passe dans le **tableau**, jamais dans la chaîne. Le pilote
+`pg` envoie la requête et ses paramètres à part ; une apostrophe dans
+`text` n'est plus qu'une apostrophe, jamais la fin d'une chaîne SQL. C'est le pilote,
+pas nous, qui garantit qu'une valeur reste une valeur.
+
+Notez que les `%` de `ILIKE` sont bien dans la **valeur** (`` `%${text}%` ``),
+pas dans le SQL : ce sont les jokers du motif, et ils doivent entourer le
+texte de l'utilisateur, pas la requête.
+
+## La règle
+
+> **Une valeur qui vient de l'extérieur ne se concatène jamais dans une
+> requête. Elle passe en paramètre.**
+
+« De l'extérieur » veut dire : un champ de formulaire, un paramètre d'URL,
+un en-tête, tout ce qui n'est pas une constante écrite dans le code. Le
+reste du repository suit déjà cette règle depuis la semaine 2 ;
+`searchQuizzes` était la seule exception, ajoutée pour la démonstration.
+
+## Au-delà de `ILIKE`
+
+Un identifiant (nom de table, nom de colonne, sens d'un `ORDER BY`) ne peut
+pas être un paramètre : `$1` ne remplace qu'une valeur. Si un de ces
+éléments doit dépendre de l'utilisateur, on le choisit dans une **liste
+blanche** écrite dans le code, jamais en collant son texte :
+
+```js
+const SENS = { asc: 'ASC', desc: 'DESC' };
+const sens = SENS[req.query.sens] ?? 'ASC';   // rien d'autre ne passe
+```
+
+Ainsi la valeur reçue ne fait que **choisir** parmi des morceaux de SQL que
+nous avons écrits ; elle n'en devient jamais un.

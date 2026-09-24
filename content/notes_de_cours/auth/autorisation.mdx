@@ -1,0 +1,279 @@
+---
+sidebar_position: 4
+sidebar_label: Rôles et autorisation
+description: "Qui a le droit de faire quoi : les rôles de Quiz M9, 401, 403 et 404, l'autorisation par ressource et les intergiciels Express qui la portent."
+---
+
+# Rôles et autorisation
+
+La semaine 5 a répondu à la question « qui es-tu ? ». Cette page répond à
+la seconde : « qu'as-tu le droit de faire ? ».
+
+Dans Quiz M9 tel qu'il était à la fin de la semaine 5, un compte connecté
+pouvait modifier **n'importe quel** questionnaire.
+
+```bash
+curl http://localhost:3000/api/quizzes/1                 # toutes les bonnes réponses
+curl -X POST http://localhost:3000/api/games/482913/next # faire avancer la partie d'un autre
+```
+
+Le client n'affiche pas ces boutons aux joueurs, mais l'API répond quand même.
+
+## Les rôles
+
+| Rôle | Qui | Ce qu'il peut faire |
+|---|---|---|
+| **Visiteur** | pas de session | voir le catalogue, jouer avec un pseudonyme |
+| **Compte connecté** | une session valide | créer des questionnaires, animer une partie |
+| **Auteur** | le compte de `quiz.account_id` | voir et modifier **son** questionnaire |
+| **Animateur** | le compte de `game.account_id` | faire avancer **sa** partie |
+| **Administrateur** | `account.is_admin` | tout ce que peut l'auteur ou l'animateur, sur tout |
+
+« Auteur » et « animateur » ne sont pas des colonnes : ils se calculent en
+comparant le compte connecté au propriétaire **d'une ressource**. C'est
+l'**autorisation par ressource** : la question n'est pas « es-tu auteur ? »
+mais « es-tu l'auteur de **celui-ci** ? ».
+
+Route par route :
+
+| Route | Visiteur | Connecté | Auteur / animateur | Admin |
+|---|---|---|---|---|
+| `GET /api/quizzes` (catalogue) | ✓ | ✓ | ✓ | ✓ |
+| `POST /api/quizzes` | 401 | ✓ | ✓ | ✓ |
+| `GET /api/quizzes/:id` (avec les réponses) | 401 | 403 | ✓ | ✓ |
+| `POST`, `PATCH`, `DELETE` sur un questionnaire | 401 | 403 | ✓ | ✓ |
+| `POST /api/games` (animer) | 401 | ✓ | ✓ | ✓ |
+| `POST /api/games/:code/next` | 401 | 403 | ✓ | ✓ |
+| Rejoindre, répondre, lire l'état d'une partie | ✓ | ✓ | ✓ | ✓ |
+
+Animer n'est pas modifier : n'importe quel compte peut lancer une partie
+sur un questionnaire du catalogue, sans voir les réponses (l'état public
+ne les contient pas).
+
+## 401, 403, 404
+
+| Code | Veut dire | Le client devrait |
+|---|---|---|
+| **401** Unauthorized | Je ne sais pas qui tu es | proposer de se connecter |
+| **403** Forbidden | Je sais qui tu es, et c'est non | afficher un refus ; se reconnecter n'y change rien |
+| **404** Not Found | Cette ressource n'existe pas | afficher « introuvable » |
+
+L'ordre des vérifications suit le tableau : d'abord la session (401),
+ensuite l'existence (404), enfin le droit (403).
+
+**403 ou 404 pour le questionnaire d'un autre ?** Répondre 403 avoue que le
+questionnaire existe. Quand l'existence même est un secret (un dépôt privé
+sur GitHub), on répond 404 aux autres. Dans Quiz M9, le catalogue affiche
+déjà tous les questionnaires : leur existence n'est pas secrète, donc 403,
+qui dit la vérité.
+
+## Où placer la vérification
+
+| Où | Rôle | Suffisant ? |
+|---|---|---|
+| L'interface (cacher un bouton) | confort : ne pas proposer l'impossible | non : `curl` n'a pas de boutons |
+| Le `loader` ou l'`action` | confort : rediriger, afficher l'erreur | non : l'API se joint sans passer par là |
+| **L'API** | **la règle** | **oui** |
+| Le `WHERE` du SQL | filtrer une liste (`listQuizzesForAccount`) | pour les listes |
+
+Toute vérification hors de l'API se contourne en parlant directement à
+l'API. On peut en ajouter dans le client pour le confort, jamais **à la
+place** de celle de l'API.
+
+## Les intergiciels Express
+
+Un intergiciel (*middleware*) est une fonction `(req, res, next)` qu'Express
+exécute **avant** la route. Il fait l'une de deux choses :
+
+- il **répond** lui-même (`res.status(401).json(...)`) et la chaîne s'arrête ;
+- il appelle **`next()`**, et Express passe au suivant.
+
+Une route peut en recevoir plusieurs, exécutés de gauche à droite :
+
+```js
+app.get('/api/quizzes/:id', requireAccount, requireQuizAuthor, async (req, res) => {
+  res.status(200).json(req.quiz);   // on n'arrive ici que si les deux ont dit oui
+});
+```
+
+Ce qu'un intergiciel trouve en chemin, il le range dans `req` pour ceux
+qui suivent : `req.account`, `req.quiz`. La route n'a plus à le relire.
+
+`express.json()` et le routeur `auth` de la semaine 5 sont déjà des
+intergiciels, déclarés avec `app.use(...)` pour **toutes** les routes. Ceux
+de l'autorisation se déclarent route par route, parce que chaque route a
+ses règles.
+
+### Exiger un compte
+
+```js title="server/src/authorization.js"
+import { currentAccount } from './auth.js';
+
+/** 401 si personne n'est connecté ; sinon req.account est le compte. */
+export async function requireAccount(req, res, next) {
+  const account = await currentAccount(req);
+  if (!account) {
+    return res.status(401).json({ error: 'Connectez-vous.' });
+  }
+  req.account = account;
+  next();
+}
+```
+
+Avant, dans chaque route :
+
+```js
+app.post('/api/quizzes', async (req, res) => {
+  const account = await currentAccount(req);
+  if (!account) {
+    return res.status(401).json({ error: 'Connectez-vous pour créer un questionnaire.' });
+  }
+  // …
+  const id = await repository.createQuiz(title, account.id);
+```
+
+Après :
+
+```js
+app.post('/api/quizzes', requireAccount, async (req, res) => {
+  // …
+  const id = await repository.createQuiz(title, req.account.id);
+```
+
+Le `return` devant `res.status(...)` compte : sans lui, la fonction
+continue, appelle `next()`, et Express tente de répondre une deuxième fois
+(`Cannot set headers after they are sent`).
+
+### Exiger d'être le propriétaire
+
+Même forme, un cran plus loin : retrouver la ressource du paramètre, puis
+comparer son propriétaire au compte connecté. Le questionnaire du fil rouge
+appartient à un compte (colonne `account_id`) ; seul son auteur le modifie :
+
+```js
+/**
+ * Le questionnaire du paramètre :id, modifiable par le compte connecté.
+ * S'utilise APRÈS requireAccount, qui a rempli req.account.
+ */
+export async function requireQuizAuthor(req, res, next) {
+  const quiz = await repository.getQuizWithQuestions(Number(req.params.id));
+  if (!quiz) {
+    return res.status(404).json({ error: 'Questionnaire introuvable.' });
+  }
+  if (quiz.accountId !== req.account.id) {
+    return res.status(403).json({ error: 'Ce questionnaire n’est pas le vôtre.' });
+  }
+  req.quiz = quiz;
+  next();
+}
+
+app.patch('/api/quizzes/:id', requireAccount, requireQuizAuthor, async (req, res) => {
+  // … valider la description
+  await repository.updateQuizDescription(req.quiz.id, description);
+  res.status(200).json({});
+});
+```
+
+Trois détails :
+
+- **L'ordre compte.** `requireQuizAuthor` lit `req.account` : placé
+  avant `requireAccount`, il plante sur `undefined.id`.
+- **Le nom des champs.** Une ligne brute de la base a `account_id` ; un
+  objet déjà mis en forme par le repository peut avoir `accountId` (c'est le
+  cas de `getQuizWithQuestions`, d'où le `quiz.accountId` ci-dessus). Regardez
+  ce que la fonction retourne.
+- **La route utilise `req.quiz`**, pas `req.params.id` : la ressource
+  vérifiée est celle qu'on modifie.
+
+## L'administrateur
+
+Le rôle est une colonne de la base, pas un champ du cookie :
+
+```sql
+is_admin BOOLEAN NOT NULL DEFAULT FALSE
+```
+
+`currentAccount` relit le compte à chaque requête : retirer le rôle prend
+effet à la requête suivante. Dans le cookie, il resterait valide jusqu'à
+l'expiration de la session (voir [La session](session), « Ce qu'on met
+dedans »).
+
+Il n'y a pas d'écran pour devenir administrateur, et c'est voulu : le rôle
+s'accorde directement dans la base.
+
+```sql
+UPDATE account SET is_admin = TRUE WHERE login = 'votre-login-github';
+```
+
+Dans le code, une seule fonction dit qui passe :
+
+```js
+/** Le propriétaire de la ressource, ou un administrateur. */
+function isOwnerOrAdmin(account, ownerId) {
+  // Boolean : SQLite rend 0 ou 1, PostgreSQL true ou false.
+  return account.id === ownerId || Boolean(account.is_admin);
+}
+```
+
+et les intergiciels l'appellent au lieu de comparer eux-mêmes.
+
+## Côté client : afficher le refus
+
+Un `loader` qui reçoit 403 ne doit pas dire « introuvable ». Il relaie le
+message de l'API avec `data()`, et l'`ErrorBoundary` de `root.jsx`
+l'affiche :
+
+```js title="client/app/routes/quiz-details.jsx"
+export async function loader({ request, params }) {
+  const response = await apiFetch(request, `/api/quizzes/${params.id}`);
+  if (!response.ok) {
+    const body = await response.json();
+    throw data(body.error, { status: response.status });
+  }
+  return response.json();
+}
+```
+
+## Tester l'autorisation
+
+`api.login(nom)` ouvre une session pour un compte de test ;
+`api.login(nom, { admin: true })` en fait un administrateur. Un test
+d'autorisation a presque toujours trois acteurs : le propriétaire, un
+autre compte, et parfois l'administrateur.
+
+```js title="server/test/authorization.test.js"
+let api, alice, bob, root;
+before(async () => {
+  api = await startServer();
+  alice = await api.login('alice');
+  bob = await api.login('bob');
+  root = await api.login('root', { admin: true });
+});
+
+test('Bob ne peut pas changer la description du questionnaire d’Alice (403)', async () => {
+  const { data } = await api.request('POST', '/api/quizzes', { title: 'À Alice' }, alice);
+
+  const refused = await api.request('PATCH', `/api/quizzes/${data.id}`, { description: 'Bob était là' }, bob);
+  assert.equal(refused.status, 403);
+
+  const accepted = await api.request('PATCH', `/api/quizzes/${data.id}`, { description: 'Ok' }, alice);
+  assert.equal(accepted.status, 200);
+});
+```
+
+Vérifiez les deux côtés : le refus **et** l'accès légitime. Un
+intergiciel qui refuse tout le monde fait passer le premier test.
+
+## Pour aller plus loin : déconnecter de force
+
+Le rôle relu dans la base règle le retrait d'un droit. Il ne règle pas le
+cookie volé : tant qu'il n'a pas expiré, il ouvre une session valide. Une
+parade peu coûteuse :
+
+1. une colonne `account.session_version`, un entier à 0 ;
+2. `writeSession(res, { accountId, version })` copie la version dans le
+   cookie ;
+3. `currentAccount` refuse la session si `version` diffère de celle du
+   compte ;
+4. « Déconnecter partout » incrémente la colonne : tous les cookies émis
+   avant deviennent invalides d'un coup.

