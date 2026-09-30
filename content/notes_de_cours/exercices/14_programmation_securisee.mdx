@@ -1,7 +1,7 @@
 ---
 sidebar_position: 14
 sidebar_label: 13. Programmation sécurisée
-description: "Quiz M9, semaine 6 : trois failles plantées dans le dépôt (injection SQL, XSS, CSRF) trouvées puis corrigées, et les secrets sortis du code."
+description: "Quiz M9, semaine 6 : trois failles plantées dans le dépôt (injection SQL, XSS, CSRF) trouvées puis corrigées."
 ---
 
 # Exercice 13 : programmation sécurisée
@@ -21,8 +21,7 @@ dans votre projet avant d'avoir fait les corrections.
 :::
 
 Notes à garder ouvertes : [L'injection SQL](/notes_de_cours/securite/injection_sql),
-[Le XSS](/notes_de_cours/securite/xss), [Le CSRF](/notes_de_cours/securite/csrf)
-et [Les secrets](/notes_de_cours/securite/secrets).
+[Le XSS](/notes_de_cours/securite/xss), [Le CSRF](/notes_de_cours/securite/csrf).
 
 ## Jalon 0 : partir du bon pied
 
@@ -54,13 +53,11 @@ ces ajouts cachent une faille.
 
 1. **Constater.** Dans le catalogue, cherchez un titre contenant une
    apostrophe, par exemple `l'histoire`. L'API répond 500 avec un message
-   d'erreur SQL : la donnée est devenue du code (voir la note).
-2. **Le test qui échoue.** Écrivez les deux tests du jalon 1 : une
-   apostrophe dans la recherche répond 200 et ne fait pas planter l'API ;
-   une recherche piégée ne renvoie aucun compte. Lancez `npm test` : ils
+   d'erreur SQL : la donnée est devenue du code (voir les notes de cours).
+2. **Le test qui échoue.** Écrivez les deux tests du jalon 1. Lancez `npm test` : ils
    échouent.
 3. **Corriger.** Dans `searchQuizzes`, passez le motif en **paramètre**
-   (`$1`) au lieu de le concaténer. La note en donne la forme exacte, `%`
+   (`$1`) au lieu de le concaténer. Les notes de cours en donnent la forme exacte, `%`
    compris.
 
 **Vérifier.** `npm test` : les deux tests passent. `l'histoire` répond
@@ -72,18 +69,16 @@ maintenant une liste vide, sans erreur.
 
 L'attaque met en scène deux personnes : **Alice**, une autrice
 malveillante qui pose le piège, et **vous**, un visiteur ordinaire qui se
-fait voler. Pour jouer Alice sans créer de compte, activez le sélecteur
-d'atelier : ajoutez `DEV_LOGIN=1` dans `server/.env` et relancez `npm run
-dev`. Une zone « Devenir : » apparaît dans la barre de navigation ; elle
-change d'identité sans mot de passe (une porte dérobée volontaire, éteinte
-partout ailleurs).
+fait voler. Alice a un compte de démonstration : « Se connecter »,
+identifiant `alice`, mot de passe `alice`. Jouez-la dans une **fenêtre
+privée**, et restez vous-même, connecté avec GitHub, dans une fenêtre
+normale : chaque fenêtre garde sa propre session.
 
-1. **Poser le piège (Alice).** Cliquez « Devenir : alice ». Créez un
-   questionnaire et donnez-lui une description qui contient une balise
-   `<img>` avec un attribut d'erreur exécutant du JavaScript, par exemple un
-   `alert`. Revenez sur vous-même (« Devenir : votre login ») et ouvrez le
-   catalogue : le code d'Alice s'exécute dans **votre** navigateur, pas le
-   sien.
+1. **Poser le piège (Alice).** Dans la fenêtre privée, connectez-vous comme
+   Alice. Créez un questionnaire et donnez-lui une description qui contient
+   une balise `<img>` avec un attribut d'erreur exécutant du JavaScript, par
+   exemple un `alert`. Dans la fenêtre normale, ouvrez le catalogue : le
+   code d'Alice s'exécute dans **votre** navigateur, pas le sien.
 2. **Mesurer les dégâts.** Un `alert` prouve la faille sans rien voler. Le
    dépôt fournit le serveur d'Alice, qui reçoit ce que le code injecté
    exfiltre :
@@ -92,17 +87,17 @@ partout ailleurs).
    node attacks/xss-collector.js
    ```
 
-   Devenez Alice, remplacez la description par la balise que le fichier
-   indique en commentaire (elle charge `vol.js` depuis ce serveur), puis
-   revenez sur votre compte. Assurez-vous d'avoir au moins un questionnaire à
+   Dans la fenêtre d'Alice, remplacez la description par la balise que le
+   fichier indique en commentaire (elle charge `vol.js` depuis ce serveur).
+   Dans la vôtre, assurez-vous d'avoir au moins un questionnaire à
    vous, rouvrez le catalogue, et ouvrez `http://localhost:4444/` : le
    serveur d'Alice affiche votre identité et vos questionnaires, **bonnes
    réponses en clair**. Le cookie, lui, n'a pas bougé (`HttpOnly`) : c'est
-   votre session, pas le cookie, qu'Alice a détournée. La note détaille
+   votre session, pas le cookie, qu'Alice a détournée. Les notes de cours détaillent
    l'attaque.
 3. **Corriger.** Dans `formatDescription`, **échappez** le texte avant
-   d'ajouter les balises `<strong>` et `<em>`. La note donne `escapeHtml` et
-   explique pourquoi `&` se remplace en premier, et pourquoi l'échappement
+   d'ajouter les balises `<strong>` et `<em>`. Les notes de cours donnent `escapeHtml` et
+   expliquent pourquoi `&` se remplace en premier, et pourquoi l'échappement
    vient avant la mise en forme.
 
 **Vérifier.** La même description s'affiche maintenant comme du **texte** :
@@ -124,15 +119,15 @@ Cette faille est côté client : il n'y a pas de test d'intégration serveur à
    node attacks/csrf-trap.js 7        # 7 : l'id d'un de vos questionnaires
    ```
 
-   Connecté à Quiz M9 dans votre navigateur, ouvrez `http://127.0.0.1:8080/`.
-   La page a l'air anodine ; en arrière-plan, elle envoie votre navigateur
-   supprimer le questionnaire 7. Il disparaît. (On utilise `127.0.0.1` et non
-   `localhost` : pour le navigateur, c'est un autre site. Voir la note.)
+   Connecté à Quiz M9 dans votre navigateur, ouvrez
+   `http://127.0.0.1:8080/bouton`. La page a l'air anodine (« Vous avez gagné
+   un iPad ! ») ; cliquez sur « Réclamez votre prix » et votre navigateur
+   part supprimer le questionnaire 7. Il disparaît. (On utilise `127.0.0.1`
+   et non `localhost` : pour le navigateur, c'est un autre site. Voir la
+   note.)
 
-2. **Les tests qui échouent.** Écrivez les deux tests du jalon 3 : un `GET`
-   sur `/api/quizzes/:id/delete` ne supprime rien ; `DELETE /api/quizzes/:id`
-   supprime bien le questionnaire de son auteur. Le premier échoue tant que
-   la route `GET` existe.
+2. **Les tests qui échouent.** Écrivez les deux tests du jalon 3. Le premier
+   échoue tant que la route `GET` existe.
 
 3. **Corriger, côté serveur.** Remplacez la route `GET .../delete` par un
    `app.delete('/api/quizzes/:id', ...)`. Un `GET` ne modifie jamais rien.
@@ -143,36 +138,11 @@ Cette faille est côté client : il n'y a pas de test d'intégration serveur à
    `DELETE` par `apiFetch`). Le modèle du champ `intent` est celui de
    `quiz-edit.jsx`.
 
-**Vérifier.** Rechargez le site piégé : la suppression ne passe plus (la
-route `GET` n'existe pas, et `SameSite=Lax` empêche un `DELETE` inter-sites
-d'emporter le cookie). Le bouton « Supprimer » de la page, lui, marche
-toujours. `npm test` : les deux tests passent.
-
-## Jalon 4 : les secrets
-
-- **Fichiers** : `server/src/session.js`, `server/.env.example`
-
-1. **Constater.** `session.js` a une valeur par défaut pour
-   `SESSION_SECRET` :
-
-   ```js
-   const SECRET = process.env.SESSION_SECRET ?? 'developpement-seulement';
-   ```
-
-   Cette valeur est dans le dépôt, donc publique. Qui la connaît peut forger
-   n'importe quelle session, administrateur compris (voir la note).
-
-2. **Corriger.** Retirez la valeur par défaut. Si `SESSION_SECRET` est
-   absente ou fait moins de 32 caractères, le serveur doit **refuser de
-   démarrer** (`throw`). La note donne le code.
-
-3. Mettez à jour `server/.env.example` : la clé n'a pas de valeur, et un
-   commentaire rappelle la commande pour en produire une.
-
-**Vérifier.** Sans `SESSION_SECRET` dans `server/.env`, `npm run dev` échoue
-au démarrage avec un message clair, au lieu de tourner avec la clé publique.
-Remplissez la clé, le serveur démarre. `npm test` passe : les helpers de
-test définissent déjà une clé aléatoire.
+**Vérifier.** Rechargez le site piégé et recliquez « Réclamez votre prix » :
+la suppression ne passe plus (la route `GET` n'existe pas, et `SameSite=Lax`
+empêche un `DELETE` inter-sites d'emporter le cookie). Le bouton
+« Supprimer » de la page Quiz M9, lui, marche toujours. `npm test` : les deux tests
+passent.
 
 ## Et le projet 1 ?
 
@@ -184,8 +154,6 @@ Passez votre jeu d'échecs au même crible :
   main à partir de texte d'un joueur (un pseudonyme, un message) ?
 - **CSRF.** Une route qui modifie l'état (jouer un coup, abandonner) est-elle
   bien un `POST`/`DELETE`, jamais un `GET` ?
-- **Secrets.** Une clé, un mot de passe traîne-t-il dans le code plutôt que
-  dans `.env` ?
 
 ## En panne ?
 
@@ -193,16 +161,15 @@ Passez votre jeu d'échecs au même crible :
   date d'avant la semaine 6. `docker compose down -v`, puis `up -d postgres`
   (sans Docker : supprimez `server/data/quizm9.db`).
 - Le site piégé « ne marche pas » alors qu'il devrait supprimer : ouvrez-le
-  bien sur `http://127.0.0.1:8080`, pas `localhost` (même site que Quiz M9,
-  la démonstration ne prouve rien). Et soyez connecté à Quiz M9.
-- `SESSION_SECRET absente ou trop courte` après le jalon 4 : c'est le
-  comportement voulu. Remplissez `server/.env`.
+  bien sur `http://127.0.0.1:8080/bouton`, pas `localhost` (même site que
+  Quiz M9, la démonstration ne prouve rien). Et soyez connecté à Quiz M9.
 - Le test du XSS : il n'y en a pas côté serveur. Vérifiez dans le
   navigateur.
-- Pas de zone « Devenir : » dans la barre : `DEV_LOGIN=1` manque dans
-  `server/.env`, ou le serveur n'a pas été relancé après l'avoir ajouté.
+- « Identifiant ou mot de passe invalide » pour `alice` / `alice`, ou une
+  erreur 500 : la base date d'avant la semaine 6. `docker compose down -v`
+  (ou supprimez `server/data/quizm9.db`), puis relancez `npm run dev`.
 - Le collecteur XSS reste vide : c'est la victime qu'il vole, pas Alice.
-  Revenez sur **votre** compte, ayez au moins un questionnaire à vous, et
+  Restez dans **votre** fenêtre, ayez au moins un questionnaire à vous, et
   rechargez `http://localhost:4444/` **après** avoir rouvert le catalogue.
   Le serveur `node attacks/xss-collector.js` doit tourner en parallèle de
   `npm run dev`.

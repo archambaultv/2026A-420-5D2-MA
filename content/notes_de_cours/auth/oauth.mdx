@@ -34,6 +34,10 @@ courriel, double authentification, fuite de la base. Un site qui n'a pas besoin
 de tout ça a intérêt à le déléguer à quelqu'un qui le fait déjà. C'est ce que «
 Se connecter avec GitHub » (ou Google, ou Microsoft) veut dire.
 
+Quiz M9 garde une exception : un compte de démonstration, `alice`, qui se
+connecte par mot de passe pour les ateliers. La base n'en garde que
+l'empreinte, calculée avec `scrypt` (`server/src/password.js`).
+
 ## OAuth 2 : quatre rôles
 
 OAuth 2 est un protocole d'**autorisation déléguée** : un utilisateur autorise

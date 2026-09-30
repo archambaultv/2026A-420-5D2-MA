@@ -208,6 +208,9 @@ production) et `apiFetch` le transmettent à l'API, qui seule décide qui est
 connecté. Les identifiants de l'application GitHub et la clé de signature
 viennent de `server/.env`, jamais du dépôt.
 
+Seule exception : le compte de démonstration `alice` (mot de passe `alice`),
+pour les ateliers. Il se connecte par mot de passe et reçoit la même session.
+
 ## Avec Docker
 
 `docker compose up --build` démarre les trois processus dans trois

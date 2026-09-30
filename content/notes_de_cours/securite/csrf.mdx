@@ -21,8 +21,10 @@ app.get('/api/quizzes/:id/delete', async (req, res) => {
 });
 ```
 
-C'est pratique, et c'est la faille. Un `GET`, c'est ce que déclenche
-n'importe quel lien, n'importe quelle image, sur **n'importe quel site**.
+C'est pratique, et c'est la faille. Un `<a>` ne sait faire qu'un `GET` :
+pour un bouton en forme de lien, on écrit donc une route `GET` sans y
+penser. Or un `GET`, **n'importe quel site** peut le déclencher, par un
+simple lien ou une redirection.
 
 ## Le mécanisme
 
@@ -30,11 +32,12 @@ n'importe quel lien, n'importe quelle image, sur **n'importe quel site**.
 votre navigateur une requête vers Quiz M9, **avec votre cookie de session**,
 sans que vous l'ayez voulu.
 
-Le cookie de session voyage tout seul (voir [La
+La racine du problème : le cookie de session voyage tout seul (voir [La
 session](/notes_de_cours/auth/session)). Le navigateur l'attache à **toute**
 requête vers le domaine de Quiz M9, peu importe d'où part la requête. Donc
 si une page d'un autre site pointe vers une adresse de Quiz M9 qui
-**modifie** des données, la modification part authentifiée comme vous.
+**modifie** des données, la modification part authentifiée comme vous. Le
+`GET` ne fait que rendre l'attaque triviale.
 
 Le dépôt contient `attacks/csrf-trap.js`, un petit serveur qui joue le site
 piégé. On lui donne l'id d'un questionnaire à détruire :
@@ -47,18 +50,16 @@ Il sert alors une page d'apparence anodine (« Vous avez gagné un iPad ! »).
 Connecté à Quiz M9 dans le même navigateur, ouvrez-la :
 
 ```text
-http://127.0.0.1:8080/
+http://127.0.0.1:8080/bouton
 ```
 
-En arrière-plan, un `location.href` envoie votre navigateur sur l'URL de
-suppression (un `GET`), avec votre cookie de session attaché tout seul. Le
-questionnaire 7 disparaît, sans que vous ayez cliqué sur « Supprimer ». (Sur
-`127.0.0.1` et non `localhost` : voir plus bas pourquoi.)
-
-Le point clé : le site piégé **ne lit jamais** la réponse de Quiz M9. La
-politique de même origine du navigateur l'en empêche. Mais il n'a pas besoin
-de la lire : il lui suffit de **déclencher** l'action. Un `GET` qui supprime
-est donc déclenchable par un lien sur le premier site venu.
+Cliquez sur « Réclamez votre prix » : le lien piégé pointe directement sur
+l'URL de suppression (un `GET`), et votre navigateur la suit avec votre
+cookie de session attaché tout seul. Le questionnaire 7 disparaît, sans que
+vous ayez touché au bouton « Supprimer » de Quiz M9. Rien ne distingue ce
+clic d'une navigation légitime : c'est un scénario CSRF assez réaliste,
+celui d'un lien reçu par courriel ou sur un forum. (Sur `127.0.0.1` et non
+`localhost` : voir plus bas pourquoi.)
 
 ## Deux défenses, ensemble
 
@@ -68,7 +69,7 @@ est donc déclenchable par un lien sur le premier site venu.
 > `DELETE`.**
 
 Ce n'est pas une convention de style : c'est une frontière de sécurité. Un
-`GET` est déclenché par un simple lien ou une image. Réserver les
+`GET` est déclenché par un simple lien ou une redirection. Réserver les
 modifications aux autres verbes retire déjà toute l'attaque par lien.
 
 Côté API, la suppression devient un `DELETE` :
@@ -111,8 +112,13 @@ premier niveau en `GET` (un lien cliqué), **mais pas** sur un `POST`, un
 suppression passée en `DELETE`, même une requête forgée depuis un site piégé
 part **sans** le cookie, donc anonyme, donc refusée en 401.
 
+Notez bien la faille que `Lax` laisse ouverte : le lien cliqué de la page
+`/bouton` **est** une navigation de premier niveau en `GET`, donc le cookie
+part quand même. C'est le bon verbe, et lui seul, qui ferme l'attaque par
+lien : sans route `GET` qui supprime, ce clic ne mène nulle part.
+
 Le `csrf-trap.js` sert justement une seconde page pour l'essayer, un
-formulaire qui s'envoie tout seul en `POST` :
+formulaire que vous envoyez d'un clic en `POST` :
 
 ```text
 http://127.0.0.1:8080/formulaire
@@ -120,8 +126,10 @@ http://127.0.0.1:8080/formulaire
 
 Sur la version vulnérable, elle ne fait rien (le client attend un `GET`).
 Après correction, elle vise bien le `DELETE`, mais `SameSite=Lax` retient le
-cookie : la requête arrive anonyme et Quiz M9 la refuse. La suppression par
-lien, elle, avait déjà été retirée par le bon verbe.
+cookie : la requête arrive anonyme et Quiz M9 la refuse.
+
+Sans `SameSite`, ce formulaire passerait avec le cookie : changer de verbe
+ne suffit pas à lui seul.
 
 Les deux défenses se complètent. Le bon verbe HTTP retire l'attaque par
 lien ; `SameSite=Lax` bloque la requête forgée qui tenterait quand même un
@@ -137,18 +145,11 @@ serait aussi. Pour démontrer une vraie attaque inter-sites en local, le
 un **autre** site que `localhost`. C'est un détail de laboratoire, mais il
 explique pourquoi la démonstration utilise `127.0.0.1` et pas `localhost`.
 
-## Et les autres modifications ?
-
-Créer un questionnaire, ajouter une question, avancer une partie : toutes
-ces routes sont déjà des `POST` ou des `DELETE`, protégées par
-`SameSite=Lax`. La suppression par lien `GET` était la seule brèche, ajoutée
-pour la démonstration. La règle « un `GET` ne modifie rien » les couvre
-toutes.
-
 ## Au-delà de `SameSite`
 
-`SameSite=Lax` est aujourd'hui le défaut des navigateurs et suffit pour Quiz
-M9. Les applications qui doivent viser plus large (vieux navigateurs,
+Chrome applique `SameSite=Lax` par défaut, mais pas Firefox ni Safari :
+c'est pourquoi Quiz M9 le pose explicitement. Il suffit pour Quiz M9. Les
+applications qui doivent viser plus large (vieux navigateurs,
 requêtes inter-sites légitimes) ajoutent un **jeton anti-CSRF** : une valeur
 imprévisible que le serveur place dans chaque formulaire et revérifie à la
 réception. Un site tiers ne peut pas la deviner. Le principe reste le même :

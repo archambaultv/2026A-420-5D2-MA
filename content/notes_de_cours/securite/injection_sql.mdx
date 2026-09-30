@@ -27,7 +27,11 @@ SQL**, et la base ne distingue pas ce que nous avons écrit de ce qu'il a tapé.
 
 ## Le mécanisme
 
-Cherchez ceci dans le champ :
+Une attaque par injection SQL consiste à entrer du SQL dans un champ de texte,
+pour que la requête finale fasse autre chose que ce que le développeur avait
+prévu.
+
+Par exemple, cherchez ceci dans le champ (sur la version vulnérable de la semaine 6) :
 
 ```text
 ' UNION SELECT id, login, name, github_id FROM account --
@@ -60,7 +64,7 @@ curl -G http://localhost:3000/api/quizzes \
 ```
 
 Le `title` est un `login`, le `questionCount` un identifiant GitHub. En
-choisissant d'autres colonnes (`is_admin`, par exemple), on lit la table
+choisissant d'autres colonnes (`is_admin`, `password_hash`), on lit la table
 `account` en entier.
 
 :::warning
