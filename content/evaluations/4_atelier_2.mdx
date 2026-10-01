@@ -1,20 +1,132 @@
 ---
 sidebar_position: 4
 sidebar_label: Atelier 2
-description: Énoncé de l'évaluation « Atelier 2 »
+description: Énoncé de l'évaluation « Atelier 2 » (Socket.IO)
 ---
 
-# Atelier 2
+import Echeance from '@site/src/components/Echeance';
+
+# Atelier 2 : enchères en direct
 
 - **Pondération** : 5 %
-- **Modalité** : individuel
+- **Modalité** : individuel, en classe, pendant la dernière heure et demie
+  du dernier cours de la semaine 9
 - **Sujet** : Socket.IO
-- **Énoncé distribué** : semaine 9
-- **Remise** : semaine 9
+- **Évaluation** : à votre poste, avant <Echeance id="atelier_2" /> (voir
+  [Montrer que ça marche](#montrer-que-ça-marche))
+- **Documentation** : toute documentation en ligne est permise, y compris
+  les notes de cours
 
-:::info[Détails à venir]
+Une page d'enchères : on choisit un lot, on voit l'enchère courante et le
+meneur, on enchérit. Tous ceux qui regardent **ce** lot voient la nouvelle
+enchère aussitôt ; ceux qui regardent un autre lot ne reçoivent rien.
 
-L'énoncé complet sera publié ici à la semaine de distribution. D'ici là, le plan
-de cours fait foi.
+Le serveur Express, la page HTML, l'affichage et la validation des montants
+sont fournis. Vous écrivez **la partie temps réel**, des deux côtés. Gardez
+ouverte la note [Socket.IO](/notes_de_cours/temps_reel/socketio).
 
-:::
+## Démarrer
+
+```bash
+git clone https://github.com/archambaultv/2026A-420-5D2-MA-Atelier2.git
+cd 2026A-420-5D2-MA-Atelier2
+npm install
+npm run dev          # http://localhost:3000
+npm test             # 10 tests : ils échouent tous au départ
+```
+
+| Fichier | |
+|---|---|
+| `lots.js` | fourni : les lots en mémoire, `findLot`, `validateBid` |
+| `server.js` | le serveur ; les gestionnaires Socket.IO sont à écrire (`TODO`) |
+| `public/app.js` | la page ; les émissions et les écoutes sont à écrire (`TODO`) |
+| `test/atelier.test.js` | les tests, complets : ils vérifient votre travail |
+
+Ouvrez deux navigateurs (ou une fenêtre normale et une fenêtre privée) pour
+voir les enchères passer de l'un à l'autre.
+
+## Le contrat des événements
+
+Respectez-le exactement : les tests s'y fient.
+
+| Sens | Événement | Données | Accusé |
+|---|---|---|---|
+| client → serveur | `lot:join` | l'id du lot | `{ ok: true, lot }` ou `{ ok: false, error }` |
+| client → serveur | `bid:place` | `{ lotId, nickname, amount }` | `{ ok: true }` ou `{ ok: false, error }` |
+| serveur → client | `lot:update` | le lot complet | |
+| serveur → client | `lot:watchers` | `{ lotId, count }` | |
+| serveur → client | `lot:closed` | le lot complet | |
+
+La salle d'un lot s'appelle `roomOf(lotId)`.
+
+## Les critères
+
+**Critère 1 : rejoindre un lot.** `lot:join` fait entrer le socket dans la
+salle du lot et répond le lot par l'accusé ; un lot inconnu est refusé. Côté
+client, le lot affiché est rejoint au chargement et quand on change de lot
+dans le menu.
+
+**Critère 2 : enchérir.** `bid:place` est validé **par le serveur** :
+pseudonyme non vide, et `validateBid(lot, amount)`. Un refus répond par
+l'accusé et ne change rien. Un succès met à jour `currentBid` et `leader`.
+Côté client, l'erreur s'affiche sous le formulaire.
+
+**Critère 3 : diffuser à la salle, et à elle seule.** Après une enchère
+acceptée, `lot:update` est reçu par tous ceux qui regardent ce lot,
+l'enchérisseur compris, et par personne d'autre. Changer de lot fait quitter
+la salle du lot précédent.
+
+**Critère 4 : la reconnexion.** Arrêtez le serveur (`Ctrl+C`) et relancez-le.
+Le bandeau « Reconnexion… » apparaît pendant la coupure. Au retour, la page
+rejoint de nouveau son lot, et les enchères des autres navigateurs
+s'affichent encore. C'est le seul critère que les tests ne vérifient pas :
+essayez-le.
+
+**Avancé 1 : la présence.** `lot:watchers` donne à la salle le nombre de
+personnes qui regardent le lot, à jour quand quelqu'un arrive, change de lot
+ou ferme sa page.
+
+**Avancé 2 : la fin de l'enchère.** Une minuterie du serveur ferme chaque lot
+à son échéance (`endsAt`) : `closed` passe à `true`, `lot:closed` est diffusé
+à la salle, et toute enchère suivante est refusée.
+
+## La grille
+
+| Note | Ce que je vois |
+|---|---|
+| **Avancé (100 %)** | les critères 1 à 4, et au moins un des deux avancés |
+| **Acquis (75 %)** | les critères 1 à 4 |
+| **Ça y est presque ! (50 %)** | les critères 1 à 3, mais la reconnexion ne rejoint pas le lot |
+| **En apprentissage (25 %)** | un ou deux des critères 1 à 3 |
+| **Non observé (0 %)** | aucun critère, ou travail non montré |
+
+Voir [Évaluation et notation](/evaluations/notation) pour le sens de chaque
+niveau.
+
+## Montrer que ça marche
+
+Levez la main quand vous avez terminé ; je passe à votre poste. **Ne partez
+pas avant que j'aie vu votre travail.** Ce que je regarde, en trois minutes :
+
+1. `npm test` : quels tests passent.
+2. Deux navigateurs sur le même lot, un troisième sur un autre : une
+   enchère, puis une enchère trop basse.
+3. `Ctrl+C` sur le serveur, `npm run dev`, puis une enchère : elle arrive
+   encore dans les autres navigateurs.
+4. `server.js` et `public/app.js`, ouverts dans VS Code.
+
+## En panne ?
+
+- Un test échoue avec « Aucun accusé de réception » : le gestionnaire
+  n'appelle pas `ack`, sur au moins un chemin (les refus aussi doivent
+  répondre).
+- L'enchérisseur ne voit pas sa propre enchère : `socket.to(salle)` exclut
+  l'émetteur, `io.to(salle)` l'inclut.
+- Tout le monde reçoit toutes les enchères : la diffusion se fait avec
+  `io.emit`, sans salle.
+- Après un changement de lot, l'ancien lot continue d'arriver : le socket
+  n'a pas quitté l'ancienne salle (`socket.leave`).
+- Après le redémarrage du serveur, plus rien n'arrive : le lot est rejoint
+  une seule fois, au chargement, au lieu de l'être à chaque `connect`.
+- `io is not defined` dans le navigateur : la page charge
+  `/socket.io/socket.io.js`, servi par le serveur. Il doit tourner.

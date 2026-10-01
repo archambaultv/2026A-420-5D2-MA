@@ -1,0 +1,189 @@
+---
+sidebar_position: 3
+sidebar_label: WebSocket dans Node et React
+description: "L'API WebSocket du navigateur, la bibliothèque ws côté Node, un protocole de messages en JSON, des salles faites à la main, et la connexion dans un effet React."
+---
+
+# WebSocket dans Node et React
+
+## Dans le navigateur
+
+L'API est fournie par le navigateur, et Node 22+ fournit la même :
+
+```js
+const ws = new WebSocket('ws://localhost:5173/ws');
+
+ws.addEventListener('open', () => {
+  ws.send('Bonjour'); // seulement quand readyState vaut OPEN
+});
+ws.addEventListener('message', (event) => {
+  console.log('reçu :', event.data); // une chaîne, pour une trame texte
+});
+ws.addEventListener('close', (event) => {
+  console.log('fermée :', event.code); // 1000, 1001, 1006...
+});
+
+ws.close(); // envoie une trame CLOSE 1000
+```
+
+On envoie et on reçoit des **messages** : le navigateur s'occupe des trames,
+du masque et des pings.
+
+L'adresse commence par `ws://` (ou `wss://` pour une page en HTTPS). Une page
+servie en HTTPS n'a pas le droit d'ouvrir un `ws://`. On construit donc
+l'adresse à partir de celle de la page :
+
+```js
+const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+```
+
+## Dans Node : la bibliothèque `ws`
+
+Node a un client WebSocket, pas de serveur. La bibliothèque
+[`ws`](https://github.com/websockets/ws) fait la poignée de main, les trames,
+le masque, la fermeture et le ping. On la branche sur le serveur HTTP
+qu'Express écoute déjà : un seul port, deux protocoles.
+
+```js title="server/src/realtime.js"
+import { WebSocket, WebSocketServer } from 'ws';
+
+export function attachRealtime(server) {
+  const wss = new WebSocketServer({ noServer: true });
+
+  // node:http émet 'upgrade' pour toute demande de montée. Express ne la
+  // voit jamais : c'est à nous de décider.
+  server.on('upgrade', (req, socket, head) => {
+    if (new URL(req.url, 'http://localhost').pathname !== '/ws') {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, req));
+  });
+}
+
+function onConnection(ws, req) {
+  ws.on('message', (data) => {
+    // data : un Buffer ; JSON.parse l'accepte directement
+  });
+  ws.on('close', () => {
+    // la connexion est finie, quelle qu'en soit la raison
+  });
+}
+```
+
+```js title="server/src/server.js"
+const server = app.listen(port);
+attachRealtime(server);
+```
+
+`noServer: true` dit à `ws` de ne pas écouter lui-même : c'est nous qui lui
+passons les demandes de montée, après avoir vérifié le chemin, et
+[l'origine](protocole_websocket#lorigine--cors-ne-protège-pas-un-websocket).
+`req` est la requête HTTP de la poignée de main : elle porte le cookie de
+session, qu'on lit une fois, à l'ouverture.
+
+## Un protocole à soi
+
+WebSocket transporte des messages, sans dire ce qu'ils veulent dire. C'est à
+l'application de définir son **protocole** : quels messages existent, et ce
+qu'ils contiennent. L'usage est du JSON avec un champ `type`.
+
+Le clavardage du salon de Quiz M9 :
+
+| Sens | Message |
+|---|---|
+| client → serveur | `{ type: 'join', code, nickname }` (sans `nickname` : l'animateur) |
+| client → serveur | `{ type: 'chat', text }` |
+| serveur → client | `{ type: 'joined', author }`, la réponse au `join` |
+| serveur → client | `{ type: 'chat', author, text, sentAt }` |
+| serveur → client | `{ type: 'error', error }` |
+
+Le message `joined` existe parce qu'un WebSocket n'a **pas de réponse** : un
+`send` part, et rien ne dit s'il a été accepté. Pour savoir que son `join` a
+réussi, le client attend un message qui le dit. On vient d'inventer un
+**accusé de réception**.
+
+## Les salles, à la main
+
+Un salon de Quiz M9 est un groupe de connexions : un message envoyé dans un
+salon va à toutes les connexions de ce salon, et à elles seules. Une `Map`
+suffit :
+
+```js
+/** code de partie → les connexions de ce salon */
+const rooms = new Map();
+
+function broadcast(code, message) {
+  const json = JSON.stringify(message);
+  for (const client of rooms.get(code) ?? []) {
+    if (client.readyState === WebSocket.OPEN) client.send(json);
+  }
+}
+```
+
+Le `join` ajoute la connexion à son salon. Et surtout, à la fermeture, on
+l'en retire :
+
+```js
+ws.on('close', () => {
+  const clients = rooms.get(room);
+  clients.delete(ws);
+  if (clients.size === 0) rooms.delete(room);
+});
+```
+
+Sans ce nettoyage, chaque onglet fermé resterait dans la `Map` pour
+toujours : une fuite de mémoire, et des envois vers des connexions mortes.
+
+Cette `Map` de salles, son `broadcast` et son nettoyage, toutes les
+bibliothèques temps réel les fournissent. Socket.IO les appelle des *rooms*.
+
+## Dans React
+
+Une connexion WebSocket est une ressource à ouvrir en entrant sur la page et
+à fermer en la quittant : un `useEffect`, avec sa fonction de nettoyage.
+
+```js
+useEffect(() => {
+  const socket = new WebSocket(url);
+  socket.onmessage = (event) => {
+    setMessages((previous) => [...previous, JSON.parse(event.data)]);
+  };
+  return () => socket.close(); // on quitte la page
+}, [url]);
+```
+
+Deux pièges :
+
+- **Le rendu côté serveur.** `WebSocket` et `location` n'existent pas pendant
+  le rendu serveur. Un effet ne s'exécute que dans le navigateur, donc tout
+  va dans l'effet, comme `sessionStorage`.
+- **Le mode strict de React** monte chaque composant deux fois en
+  développement : effet, nettoyage, effet. Dans l'onglet Réseau, on voit
+  deux connexions, dont la première est fermée aussitôt. C'est voulu : le
+  mode strict vérifie que le nettoyage fait bien son travail. En production,
+  il n'y en a qu'une.
+
+## Les relais
+
+Le navigateur parle au client (port 5173), pas directement à l'API. Pour
+`/api`, le client relaie les requêtes. Pour `/ws`, il faut relayer la
+**montée**, puis la connexion entière :
+
+- **En développement**, Vite le fait, avec `ws: true` :
+
+  ```js title="client/vite.config.js"
+  proxy: {
+    '/api': 'http://localhost:3000',
+    '/ws': { target: 'ws://localhost:3000', ws: true },
+  },
+  ```
+
+- **En production**, `client/server.js` ne peut pas utiliser `fetch` : après
+  le 101, ce n'est plus du HTTP. Il ouvre un socket TCP vers l'API, lui
+  réécrit la demande de montée, puis branche les deux sockets bout à bout.
+
+Un mandataire qui ne sait pas relayer une montée, c'est un WebSocket qui ne
+s'ouvre jamais. On le retrouvera à la semaine 12, avec le vrai mandataire du
+déploiement.

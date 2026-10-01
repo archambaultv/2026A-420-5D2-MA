@@ -22,6 +22,10 @@ const echeances = {
     1: 'le mercredi 7 octobre 2026, à 23 h 59',
     2: 'le mardi 6 octobre 2026, à 23 h 59',
   },
+  atelier_2: {
+    1: 'la fin du cours du mercredi 28 octobre 2026',
+    2: 'la fin du cours du jeudi 29 octobre 2026',
+  },
 };
 
 export default echeances;

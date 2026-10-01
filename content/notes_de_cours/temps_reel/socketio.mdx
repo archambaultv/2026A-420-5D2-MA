@@ -1,0 +1,204 @@
+---
+sidebar_position: 4
+sidebar_label: Socket.IO
+description: "Ce que Socket.IO ajoute à WebSocket : des événements nommés, des accusés de réception, des salles, la diffusion, la reconnexion. Et les mêmes idées dans d'autres langages."
+---
+
+# Socket.IO
+
+Le clavardage de la semaine 7 a montré ce qu'il faut écrire à la main
+au-dessus d'un WebSocket :
+
+| Ce qu'on a écrit en semaine 7 | Ce que Socket.IO fournit |
+|---|---|
+| un champ `type` dans chaque message JSON | des **événements nommés** |
+| le message `joined`, pour savoir si le `join` a réussi | des **accusés de réception** |
+| la `Map` code → connexions, son `broadcast`, son nettoyage | des **salles** (*rooms*) |
+| rien : un serveur qui redémarre, et le clavardage est mort | la **reconnexion automatique** |
+| rien : aucune détection des connexions mortes | un **battement de cœur** (ping/pong) |
+
+[Socket.IO](https://socket.io/fr/docs/v4/) est la bibliothèque temps réel la
+plus répandue de l'écosystème Node.
+
+## Ce n'est pas un WebSocket
+
+Socket.IO est **son propre protocole**, transporté par WebSocket. Dans
+l'onglet Réseau, les trames ressemblent à ceci :
+
+```text
+0{"sid":"Rk2...","pingInterval":25000,"pingTimeout":20000}   ouverture
+40                                                           connexion acceptée
+42["chat:message",{"author":"Bob","text":"Salut"}]           un événement
+2                                                            ping
+3                                                            pong
+```
+
+Conséquence : un `new WebSocket(...)` natif ne peut pas parler à un serveur
+Socket.IO, ni un client Socket.IO à un serveur WebSocket ordinaire. Il faut
+**Socket.IO des deux côtés** : `socket.io` sur le serveur,
+`socket.io-client` dans le navigateur.
+
+Le serveur officiel n'existe qu'en Node. Les clients existent dans beaucoup
+de langages (Java, Swift, Kotlin, Python, .NET...), et des serveurs non
+officiels existent ailleurs (Python, Rust). Mais un serveur en Go ou en C#
+utilisera presque toujours autre chose. Voir [Les mêmes idées
+ailleurs](#les-mêmes-idées-ailleurs).
+
+## Brancher
+
+Côté serveur, Socket.IO se branche sur un serveur HTTP, comme `ws` :
+
+```js
+import { createServer } from 'node:http';
+import { Server } from 'socket.io';
+
+const server = createServer(app);
+const io = new Server(server, { transports: ['websocket'] });
+
+io.on('connection', (socket) => {
+  // une connexion : un objet socket, par navigateur
+});
+
+server.listen(3001);
+```
+
+Côté navigateur :
+
+```js
+import { io } from 'socket.io-client';
+
+const socket = io({ transports: ['websocket'] }); // même adresse que la page
+```
+
+Par défaut, Socket.IO commence en sondage long, puis monte en WebSocket si
+possible. `transports: ['websocket']`, des deux côtés, saute cette étape :
+on n'en a pas besoin, et il n'y a qu'un protocole à relayer.
+
+## Événements et accusés
+
+On émet un **événement nommé**, avec n'importe quelles données JSON :
+
+```js
+socket.emit('chat:send', 'Bonjour');                // client
+socket.on('chat:message', (message) => { ... });    // client
+```
+
+Si le **dernier argument** d'`emit` est une fonction, c'est un **accusé de
+réception** : le serveur l'appelle pour répondre à cet événement-là. C'est
+le `joined` de la semaine 7, sans l'inventer :
+
+```js title="client"
+socket.emit('chat:join', { code, nickname }, (reply) => {
+  if (!reply.ok) setError(reply.error);
+});
+```
+
+```js title="serveur"
+socket.on('chat:join', async ({ code, nickname }, ack) => {
+  // ... vérifications ...
+  ack({ ok: true, author: nickname });
+});
+```
+
+Ou, avec une promesse et un délai (pratique dans les tests) :
+
+```js
+const reply = await socket.timeout(1000).emitWithAck('chat:join', { code, nickname });
+```
+
+Une convention utile : l'accusé répond toujours `{ ok: true, ... }` ou
+`{ ok: false, error }`, comme les réponses d'erreur de l'API.
+
+## Les salles
+
+Une salle est un nom, et un ensemble de sockets **côté serveur** :
+
+```js
+socket.join(`chat:${code}`);   // entrer
+socket.leave(`chat:${code}`);  // sortir
+```
+
+Un socket peut être dans plusieurs salles. À la déconnexion, Socket.IO le
+retire de toutes ses salles : c'était notre nettoyage de la `Map`. Le client,
+lui, ne sait rien des salles. Seul le serveur décide qui y entre.
+
+## Diffuser
+
+| Code (serveur) | Qui reçoit |
+|---|---|
+| `socket.emit('e', data)` | ce socket seulement |
+| `socket.to(salle).emit('e', data)` | la salle, **sauf** ce socket |
+| `io.to(salle).emit('e', data)` | toute la salle |
+| `io.emit('e', data)` | tout le monde |
+
+Un message de clavardage va à `io.to(salle)` : son auteur le voit aussi
+s'afficher. Une notification « Bob est arrivé » irait à `socket.to(salle)` :
+Bob n'a pas besoin qu'on le lui dise.
+
+## Ce qu'un socket sait de lui-même
+
+- `socket.data` : un objet libre, pour retenir ce qu'on a appris de cette
+  connexion (son salon, son nom affiché). Il remplace les variables `room` et
+  `author` de la semaine 7.
+- `socket.handshake.headers` : les en-têtes de la poignée de main, dont le
+  **cookie**. C'est là qu'on reconnaît un utilisateur connecté.
+- `socket.rooms` : les salles où il se trouve.
+
+L'origine se vérifie à l'ouverture, avec `allowRequest`, avant même la
+connexion :
+
+```js
+const io = new Server(server, {
+  allowRequest: (req, callback) => {
+    const origin = req.headers.origin;
+    callback(null, !origin || allowedOrigins.includes(origin));
+  },
+});
+```
+
+## La reconnexion, et le rattrapage
+
+Coupez le serveur et relancez-le : le client Socket.IO **se reconnecte tout
+seul**, en espaçant ses tentatives. Mais un serveur qui redémarre a tout
+oublié, y compris les salles. Le client reconnecté n'est plus dans aucune
+salle et ne reçoit plus rien, sans aucune erreur.
+
+Deux règles, qui valent pour n'importe quelle technologie temps réel :
+
+1. **Se réabonner à chaque connexion**, pas seulement à la première :
+
+   ```js
+   socket.on('connect', watch); // première connexion ET reconnexions
+   ```
+
+2. **Rattraper l'état manqué** pendant la coupure. Le plus simple : à
+   l'abonnement, le serveur renvoie l'état complet par l'accusé de réception.
+   Un client reconnecté repart donc d'un état exact, puis suit les nouvelles.
+
+   ```js
+   function watch() {
+     socket.emit('game:watch', code, (reply) => setGame(reply.game));
+   }
+   ```
+
+Socket.IO a aussi une option `connectionStateRecovery`, qui rejoue les
+événements manqués après une courte coupure. Elle ne survit pas à un
+redémarrage du serveur, et elle n'existe que dans Socket.IO. L'instantané à
+l'abonnement fonctionne partout.
+
+## Les mêmes idées ailleurs
+
+L'API de Socket.IO ne se transpose pas, mais ses idées, si. Chaque écosystème
+a son outil, avec le même vocabulaire :
+
+| Idée | Socket.IO (Node) | SignalR (.NET) | Phoenix (Elixir) | Go |
+|---|---|---|---|---|
+| canal de diffusion | salle | groupe | *topic* | un *hub* écrit à la main |
+| requête et réponse sur le socket | accusé | méthode du *hub* | `push` et `reply` | un identifiant de corrélation, à la main |
+| reconnexion | automatique | automatique | automatique | à la main |
+| rattrapage de l'état | à vous | à vous | à vous | à vous |
+| plusieurs serveurs | *adapter* Redis ou PostgreSQL | *backplane* Redis | PubSub distribué | Redis ou NATS, à la main |
+
+La colonne Go ressemble à la semaine 7 : un WebSocket, une `Map` de salles,
+et le reste écrit soi-même. La ligne du rattrapage est la même partout :
+aucun outil ne sait ce qu'est l'état de **votre** application.

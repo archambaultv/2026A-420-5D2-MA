@@ -1,0 +1,172 @@
+---
+sidebar_position: 16
+sidebar_label: 15. Le clavardage du salon
+description: "Quiz M9, semaine 7 : un clavardage dans le salon d'attente, sur WebSocket avec la bibliothèque ws. Salles faites à la main, vérification de l'origine, crochet React."
+---
+
+# Exercice 15 : le clavardage du salon
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+Les joueurs qui attendent dans le salon pourront se parler. La liste des
+joueurs continue d'arriver par le sondage ; les messages, eux, arriveront
+par WebSocket. Vous verrez les deux côte à côte.
+
+Notes à garder ouvertes : [WebSocket dans Node et React](/notes_de_cours/temps_reel/websocket_node)
+et [Le protocole WebSocket](/notes_de_cours/temps_reel/protocole_websocket).
+
+## Jalon 0 : partir du bon pied
+
+Sur la branche `sem-07` de l'exercice 14 :
+
+```bash
+npm install                     # la bibliothèque ws
+docker compose up -d postgres
+npm run dev
+npm test
+```
+
+**Vérifier.** `fail 0`, et 10 `todo` dans `chat.test.js`.
+
+Ce qui est fourni :
+
+- `server/src/realtime.js` : le protocole, en commentaire d'en-tête, et le
+  squelette à compléter. `server.js` appelle déjà `attachRealtime(server)`.
+- `client/vite.config.js` relaie `/ws` à l'API ; `client/server.js` fait de
+  même en production.
+- `client/app/components/ChatBox.jsx` affiche le clavardage ; il est déjà
+  dans `lobby.jsx`, branché sur `useChat`, qui ne fait rien pour l'instant.
+- `server/test/chat.test.js` : les tests des jalons 1 et 2, marqués `todo`.
+
+## Jalon 1 : accepter la connexion
+
+- **Fichier** : `server/src/realtime.js`
+
+1. Écrivez `attachRealtime(server)` : un `WebSocketServer` en mode
+   `noServer`, et un écouteur `upgrade` qui accepte le chemin `/ws`
+   seulement. La note en donne le modèle.
+2. Dans `chat.test.js`, retirez `todo` du test du jalon 1 : remplacez
+   `jalon1` par `options`.
+
+**Vérifier.** `npm test` : le test du jalon 1 passe. Dans la console du
+navigateur, sur n'importe quelle page de Quiz M9 :
+
+```js
+const ws = new WebSocket(`ws://${location.host}/ws`);
+ws.onmessage = (e) => console.log(e.data);
+ws.onopen = () => ws.send('{"type":"bonjour"}');
+```
+
+La réponse est `{"type":"error","error":"Type de message inconnu."}`.
+
+## Jalon 2 : rejoindre et diffuser
+
+- **Fichier** : `server/src/realtime.js`
+
+1. `broadcast(code, message)` : envoie le message à toutes les connexions
+   **ouvertes** du salon.
+2. Le message `join` :
+   - la partie de `message.code` doit exister (`repository.findGameByCode`) ;
+   - avec un `nickname`, le joueur doit être inscrit
+     (`repository.findPlayer`) : l'auteur est son pseudonyme ;
+   - sans `nickname`, c'est l'animateur : `currentAccount(req)` doit être
+     le compte de `game.account_id`. L'auteur est
+     `` `${account.login} (animateur)` ``. La demande de montée `req` porte
+     le cookie : c'est la seule fois où on le lit ;
+   - en cas de refus, `{ type: 'error', error }` ; sinon, retenez `room` et
+     `author`, ajoutez `ws` au salon dans `rooms`, et répondez
+     `{ type: 'joined', author }`.
+3. Le message `chat` : diffusez `{ type: 'chat', author, text, sentAt }` au
+   salon, avec `sentAt: Date.now()`.
+4. Retirez `todo` des tests du jalon 2.
+
+**Vérifier.** `npm test` : les tests des jalons 1 et 2 passent.
+
+## Jalon 3 : le crochet React
+
+- **Fichier** : `client/app/useChat.js`
+
+Écrivez `useChat(code, session)`, qui retourne `{ messages, error, send }`.
+
+1. Dans un `useEffect` : ouvrez la connexion (`ws:` ou `wss:` selon la
+   page), envoyez le `join` à l'ouverture, ajoutez chaque message `chat`
+   reçu à `messages`, et placez un message `error` dans `error`.
+2. Le nettoyage de l'effet ferme la connexion.
+3. `send(text)` envoie un message `chat`. Gardez la connexion dans un
+   `useRef` pour y accéder hors de l'effet.
+
+**Prédire :** combien de connexions vers `/ws` apparaîtront dans l'onglet
+Réseau en ouvrant le salon ?
+
+**Vérifier.** Animateur dans un navigateur, deux joueurs dans deux fenêtres
+privées : un message s'affiche dans les trois salons, avec son auteur.
+L'onglet Réseau montre deux connexions par salon, dont la première est
+fermée aussitôt (le mode strict de React, voir la note).
+
+## Jalon 4 : le serveur se défend
+
+- **Fichiers** : `server/src/realtime.js`, `server/test/chat.test.js`
+
+1. Un `chat` avant le `join` est refusé, et un message vide ou de plus de
+   `MAX_LENGTH` caractères aussi.
+2. L'origine : dans l'écouteur `upgrade`, refusez la montée (`403`) si
+   l'en-tête `Origin` est présent et n'est pas dans `ALLOWED_ORIGINS`.
+3. À la fermeture d'une connexion, retirez-la de son salon, et supprimez le
+   salon s'il est vide.
+4. Écrivez les quatre tests `todo` du jalon 4. Les fonctions en haut du
+   fichier (`connect`, `ask`, `collect`) sont là pour ça. Pour envoyer un
+   cookie ou une origine, le `WebSocket` de Node accepte des en-têtes :
+
+   ```js
+   await connect({ headers: { cookie: alice } });
+   await assert.rejects(connect({ headers: { origin: 'http://site-piege.example' } }));
+   ```
+
+**Prédire :** sans l'étape 3, combien d'entrées resterait-il dans `rooms`
+après une journée de cours ?
+
+**Vérifier.** `npm test` : aucun `todo` dans `chat.test.js`, aucun `fail`.
+
+## Jalon 5 : côte à côte
+
+Animateur et deux joueurs dans le salon, l'onglet Réseau ouvert sur un des
+joueurs.
+
+1. Filtre **Fetch/XHR** : un `GET /api/games/...` par seconde, qui défile
+   sans arrêt.
+2. Filtre **WS**, connexion `/ws`, onglet **Messages** : rien ne bouge tant
+   que personne n'écrit.
+3. Inscrivez un troisième joueur, puis envoyez un message. Lequel apparaît
+   tout de suite chez les autres ? Lequel met jusqu'à une seconde ?
+
+C'est la dette de la semaine 1, mesurée : la semaine 9 remplacera le
+sondage par un socket.
+
+## Pour aller plus loin
+
+- **L'historique.** Gardez les 20 derniers messages de chaque salon, et
+  envoyez-les à celui qui arrive.
+- **Les connexions mortes.** `ws.ping()` toutes les 30 secondes ; une
+  connexion qui n'a pas répondu (`ws.on('pong', ...)`) depuis le ping
+  précédent est coupée avec `ws.terminate()`.
+- **L'usurpation.** Rien n'empêche quelqu'un d'envoyer un `join` avec le
+  pseudonyme d'un autre joueur. C'est déjà vrai pour `POST /answers`.
+  Comment le serveur pourrait-il reconnaître un joueur sans compte ?
+
+## En panne ?
+
+- Le test du jalon 1 échoue en `timeout` : l'écouteur `upgrade` ne fait
+  rien pour `/ws`. Il doit appeler `wss.handleUpgrade`.
+- La console du navigateur dit que la connexion à `ws://localhost:5173/ws` a
+  échoué : l'API ne tourne pas, ou `attachRealtime` refuse `/ws`.
+- `Seul l’animateur parle sans pseudonyme.` alors que vous êtes l'animateur :
+  vous n'êtes pas connecté dans **ce** navigateur, ou la partie a été créée
+  par un autre compte.
+- Les messages arrivent en double : la connexion n'est pas fermée dans le
+  nettoyage de l'effet, ou `onmessage` est attaché deux fois.
+- `InvalidStateError` dans `send` : la connexion n'est pas encore `OPEN`.
+  Vérifiez `readyState` avant d'envoyer.

@@ -1,0 +1,87 @@
+---
+sidebar_position: 1
+sidebar_label: Sondage ou poussée
+description: "La dette de la semaine 1 chiffrée, puis les quatre façons pour un serveur de prévenir un navigateur : sondage, sondage long, SSE et WebSocket."
+---
+
+# Sondage ou poussée
+
+Depuis la semaine 1, chaque navigateur de Quiz M9 demande l'état de la
+partie **toutes les secondes** :
+
+```js title="client/app/useGame.js"
+poll();
+const timer = setInterval(poll, 1000);
+```
+
+C'est le **sondage** (*polling*). Ça marche, mais la question apparaît jusqu'à
+une seconde après que l'animateur l'a lancée, et le compte à rebours saute.
+
+## Le coût du sondage
+
+Une réponse à `GET /api/games/:code` coûte au serveur de six requêtes SQL
+(dans le salon) à dix (pendant une question) : la partie, le questionnaire
+avec ses questions et ses choix, les joueurs, le nombre
+de réponses. Pour une partie de 30 joueurs :
+
+| | Par seconde | Pour une partie de 10 minutes |
+|---|---|---|
+| Requêtes HTTP | 30 | 18 000 |
+| Requêtes SQL | de 180 à 300 | de 108 000 à 180 000 |
+
+Pendant ce temps, l'état change rarement : un joueur qui arrive, une
+question qui s'ouvre, puis se ferme vingt secondes plus tard. Plus de neuf
+réponses sur dix disent « rien de neuf ».
+
+Et le délai : un changement arrive au hasard entre deux sondages, donc **500
+ms en moyenne, jusqu'à 1 s**. Sonder plus souvent réduit le délai et
+multiplie le coût. Le sondage ne fait qu'échanger l'un contre l'autre.
+
+Le problème de fond : en HTTP, **seul le client parle en premier**. Le
+serveur sait que la question vient de changer, mais il n'a aucun moyen de le
+dire au navigateur. Il attend qu'on lui pose la question.
+
+## Quatre façons de prévenir le navigateur
+
+**Le sondage** (*polling*). Le client redemande à intervalle fixe. Simple,
+compatible avec tout, et coûteux à vide.
+
+**Le sondage long** (*long polling*). Le client demande, et le serveur
+**retient la réponse** jusqu'à ce qu'il y ait du nouveau (ou jusqu'à un
+délai). Le client redemande aussitôt. Le délai tombe à presque rien, mais
+chaque nouvelle coûte une requête HTTP complète, en-têtes compris.
+
+**Les événements envoyés par le serveur** (SSE, *Server-Sent Events*). Une
+seule requête HTTP dont la réponse ne se termine jamais : le serveur y écrit
+un événement à chaque nouvelle. Le navigateur fournit `EventSource`, qui se
+reconnecte tout seul. Mais le canal va dans **un seul sens** : pour parler au
+serveur, le client fait des requêtes HTTP ordinaires.
+
+**WebSocket**. Une connexion qui commence en HTTP, puis **change de
+protocole** et reste ouverte. Ensuite, les deux côtés envoient des messages
+quand ils veulent, dans les deux sens, avec quelques octets d'en-tête par
+message.
+
+| | Qui parle en premier | Délai | Coût quand rien ne change |
+|---|---|---|---|
+| Sondage | le client | jusqu'à l'intervalle | une requête par intervalle, par client |
+| Sondage long | le client | presque nul | une requête en attente par client |
+| SSE | le serveur, dans un seul sens | presque nul | une connexion ouverte par client |
+| WebSocket | les deux | presque nul | une connexion ouverte par client |
+
+## Lequel choisir ?
+
+- **Le sondage** reste raisonnable quand les données changent rarement et
+  que la seconde de retard ne gêne personne : un tableau de bord, l'état
+  d'une commande. C'est ce que demande le projet 1 : deux joueurs d'échecs
+  qui jouent un coup toutes les trente secondes ne font pas tomber le
+  serveur.
+- **SSE** convient quand seul le serveur a des nouvelles : des
+  notifications, un fil d'activité, la réponse d'un modèle de langage qui
+  s'affiche mot à mot.
+- **WebSocket** convient quand les deux côtés parlent souvent, et vite :
+  un jeu, un clavardage, un éditeur partagé.
+
+Quiz M9 est un jeu à plusieurs, avec un clavardage dans le salon : c'est un
+cas d'école pour WebSocket. La semaine 7 l'introduit avec le clavardage, la
+semaine 9 remplace le sondage.

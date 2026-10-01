@@ -1,0 +1,230 @@
+---
+sidebar_position: 17
+sidebar_label: 16. Socket.IO
+description: "Quiz M9, semaine 9 : le service temps réel avec Socket.IO, l'API qui annonce, le sondage qui disparaît, l'horloge des questions, la reconnexion et le conteneur."
+---
+
+# Exercice 16 : Quiz M9 passe à Socket.IO
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+Le clavardage passe sur Socket.IO, dans un service à part, et le sondage de
+la semaine 1 disparaît : chaque navigateur reçoit l'état de la partie au
+moment où il change.
+
+Notes à garder ouvertes : [Socket.IO](/notes_de_cours/temps_reel/socketio)
+et [Le service temps réel](/notes_de_cours/temps_reel/service_temps_reel).
+
+## Jalon 0 : partir du bon pied
+
+```bash
+git checkout main
+git pull
+git checkout -b sem-09
+npm install
+docker compose up -d postgres
+npm run dev                     # trois services : server, realtime, client
+npm test
+```
+
+**Vérifier.** Trois lignes « démarré » dans le terminal, dont `temps réel
+démarré sur http://localhost:3001`. `npm test` : `fail 0`, et des `todo`
+dans `announce.test.js` et `realtime.test.js`. Une partie se joue encore,
+par le sondage.
+
+Ce qui a changé depuis la semaine 7 :
+
+- un troisième espace de travail, `realtime/` : le service Socket.IO. Le
+  serveur est branché (`createRealtime`) ; ses événements sont à écrire ;
+- le `ws` de l'API a disparu, et le clavardage avec lui : il revient au
+  jalon 1 ;
+- `client/app/socket.js` : la connexion Socket.IO du navigateur, une seule
+  pour toute l'application ;
+- `client/app/components/ConnectionStatus.jsx` : un bandeau « Reconnexion… » ;
+- l'API a une route `GET /api/games/:code/host`, pour le service temps réel ;
+- `server/test/helpers.js` remplace le service temps réel par un faux, qui
+  retient les annonces de l'API dans `api.announcements`.
+
+## Jalon 1 : le clavardage, sur Socket.IO
+
+- **Fichiers** : `realtime/src/realtime.js`, `client/app/useChat.js`
+
+Le protocole est en tête de `realtime.js`. Côté serveur, dans
+`io.on('connection')` :
+
+1. `chat:join`, qui reçoit `{ code, nickname }` et un accusé :
+   - avec un pseudonyme, lisez l'état de la partie avec `fromApi` : le
+     pseudonyme doit être dans `data.players` ;
+   - sans pseudonyme, demandez à l'API si c'est l'animateur :
+     `fromApi('/api/games/CODE/host', socket.handshake.headers.cookie)`, qui
+     répond `{ login }` ;
+   - retenez `{ code, author }` dans `socket.data.chat`, rejoignez la salle
+     `chatRoom(code)`, et répondez `ack({ ok: true, author })`.
+2. `chat:send`, qui reçoit le texte et un accusé : refusé avant `chat:join`, et au-delà de
+   `MAX_LENGTH` ; sinon, `chat:message` à **toute** la salle, puis
+   `ack({ ok: true })`.
+
+Côté client, `useChat` utilise `getSocket()` :
+
+3. Dans l'effet, écoutez `chat:message`, et émettez `chat:join` avec un
+   accusé qui place l'erreur éventuelle dans `error`.
+4. Le nettoyage **retire l'écouteur** (`socket.off`), mais ne ferme pas la
+   connexion : elle est partagée.
+5. `send(text)` émet `chat:send`, avec un accusé.
+
+Retirez `todo` des tests du jalon 1 dans `realtime.test.js`.
+
+**Vérifier.** `npm test` : les tests du jalon 1 passent. Le clavardage
+fonctionne dans le salon, comme à la semaine 7. Comparez votre `useChat`
+avec celui de la semaine 7 (`git diff sol-07 -- client/app/useChat.js`) :
+qu'est-ce qui a disparu ? Dans l'onglet Réseau, filtre WS : une seule
+connexion, même en mode strict.
+
+## Jalon 2 : l'API annonce
+
+- **Fichiers** : `server/src/announce.js`, `server/src/app.js`,
+  `realtime/src/realtime.js`
+
+1. Écrivez `announce(code)` comme dans la note : un `POST` vers le service
+   temps réel, avec le secret et un délai d'une seconde, dans un
+   `try`/`catch` qui écrit l'erreur avec `console.warn`.
+2. Appelez `await announce(game.code)` dans les trois routes qui changent
+   une partie : l'inscription d'un joueur, `next` et la réponse.
+3. Dans `realtime.js`, la route `POST /internal/games/:code` : 401 sans le
+   bon secret ; sinon `game:state` à la salle `gameRoom(code)`, puis 204.
+4. Retirez `todo` des tests du jalon 2, dans les deux fichiers.
+
+**Vérifier.** `npm test` : les tests du jalon 2 passent. Inscrivez un
+joueur : le terminal de l'API n'affiche aucun avertissement « Annonce de la
+partie ... impossible ».
+
+## Jalon 3 : le sondage disparaît
+
+- **Fichiers** : `realtime/src/realtime.js`, `client/app/useGame.js`,
+  `client/app/components/Countdown.jsx`, `client/app/api.js`
+
+1. `game:watch`, qui reçoit le code et un accusé : lisez l'état à l'API (404 :
+   `ack({ ok: false, error })`), quittez les autres salles `game:` du socket,
+   rejoignez `gameRoom(code)`, et répondez `ack({ ok: true, game: data })`.
+2. Réécrivez `useGame` : au montage, émettez `game:watch` et placez
+   l'état de l'accusé dans `game` ; écoutez `game:state` (seulement si
+   `state.code` est la bonne partie). **Supprimez le `setInterval`.**
+3. `fetchGame` n'a plus d'appelant dans `api.js` : retirez-la.
+4. Le compte à rebours ne se redessine plus, faute de sondage. Donnez-lui
+   sa propre minuterie, qui ne touche pas au réseau : un `useState` pour
+   l'heure, mis à jour quatre fois par seconde dans un `useEffect`.
+5. Retirez `todo` des tests du jalon 3.
+
+**Vérifier.** Une partie complète à trois navigateurs. Onglet Réseau,
+filtre Fetch/XHR : **plus rien ne défile**. Filtre WS, onglet Messages : un
+message par changement, et rien entre deux. Puis regardez le diff de la
+session :
+
+```bash
+git diff sol-06 -- client/app/useGame.js
+```
+
+## Jalon 4 : le travail caché du sondage
+
+**Prédire, avant de jouer :** maintenant que plus personne ne sonde, que se
+passe-t-il quand le temps d'une question est écoulé ?
+
+Jouez une question sans que personne ne réponde, et sans que l'animateur
+la close. Observez. Lisez la section « Le travail caché du sondage » de la
+note pour l'expliquer.
+
+- **Fichiers** : `server/src/clock.js`, `server/src/app.js`
+
+1. Écrivez `scheduleClose(code)` : annulez la minuterie de la partie
+   (`clearTimeout`, puis retirez-la de `timers`) ; si la partie est en pleine
+   question, programmez `closeAndAnnounce(code)` à l'échéance
+   (`question_started_at` + la durée), plus 10 ms.
+2. Dans la route `next`, appelez `await scheduleClose(game.code)` avant
+   l'annonce. Elle programme la question qui s'ouvre, et annule la
+   minuterie d'une question que l'animateur vient de clore.
+3. `server.js` appelle déjà `rearmTimers()` au démarrage. Lisez-la.
+4. Retirez `todo` du test du jalon 4.
+
+**Vérifier.** `npm test` : plus aucun `todo`. Une question sans réponse se
+ferme toute seule à 0 s, et le classement s'affiche chez tout le monde.
+
+## Jalon 5 : la reconnexion (chasse au bogue)
+
+En pleine partie, redémarrez le service temps réel : ajoutez une ligne vide
+dans `realtime/src/realtime.js` et sauvegardez. `node --watch` le relance.
+
+**Observez.** Le bandeau « Reconnexion… » apparaît, puis disparaît : Socket.IO
+s'est reconnecté tout seul. Faites avancer la partie. Que voient les joueurs ?
+
+**Le bogue.** Le service redémarré a oublié ses salles. Le client est
+reconnecté, mais il n'est plus abonné à rien : aucune erreur, et plus
+aucune nouvelle.
+
+- **Fichiers** : `client/app/useGame.js`, `client/app/useChat.js`
+
+1. Émettez `game:watch` à **chaque** événement `connect`, pas seulement au
+   montage. Si le socket est déjà connecté au montage, émettez-le aussi tout
+   de suite.
+2. Même chose pour `chat:join`.
+3. Retirez ces écouteurs dans le nettoyage.
+
+**Vérifier.** Même scénario : après la reconnexion, la partie continue
+chez tout le monde.
+
+Mieux : faites avancer la partie **pendant** que le service est arrêté.
+Arrêtez `npm run dev`, puis lancez chaque service dans son propre terminal :
+`npm run dev -w server`, `npm run dev -w client` et
+`npm run dev -w realtime`. Arrêtez le temps réel (`Ctrl+C` dans son
+terminal), faites avancer la partie, puis relancez-le. Chaque client
+affiche la bonne question, grâce à l'état renvoyé par l'accusé de
+`game:watch`.
+
+## Jalon 6 : en conteneurs
+
+- **Fichier** : `compose.yml`
+
+Le `Dockerfile` du service temps réel et le relais de `/socket.io` dans
+`client/server.js` sont fournis. Il reste à dire à chaque service où
+joindre les autres : trois commentaires `À faire (jalon 6)` dans
+`compose.yml`. Le tableau de la note donne les variables.
+
+```bash
+# Ctrl+C sur npm run dev d'abord : les ports sont les mêmes
+docker compose up --build
+```
+
+**Vérifier.** Une partie complète sur [http://localhost:5173](http://localhost:5173), clavardage
+compris. `docker compose ps` : quatre services. `docker compose logs
+realtime` : le service a démarré, et ne se plaint de rien.
+
+## Pour aller plus loin
+
+- `.github/workflows/ci.yml` construit déjà une troisième image,
+  `quizm9-realtime`, et `deploy/compose.yml` l'utilise. Vérifiez qu'elle est
+  publiée après un `push` sur `main`.
+- Notifiez la salle du clavardage quand quelqu'un y entre :
+  `socket.to(salle)`, pour que l'arrivant ne reçoive pas sa propre annonce.
+- `connectionStateRecovery` : activez-le dans `new Server(...)`, coupez la
+  connexion d'un client quelques secondes (onglet Réseau, **Hors ligne**),
+  et regardez `socket.recovered` à la reconnexion.
+
+## En panne ?
+
+- `npm run dev` ne lance que deux services : `npm install` n'a pas été
+  relancé après le `git pull` (le nouvel espace de travail `realtime/`).
+- Un test `realtime` échoue en `timeout` : le gestionnaire n'appelle jamais
+  `ack`. Chaque chemin, y compris les refus, doit répondre.
+- `Annonce de la partie ... impossible : fetch failed` dans le terminal de
+  l'API : le service temps réel ne tourne pas, ou `REALTIME_URL` est faux.
+- L'annonce répond 401 : l'API et le service n'ont pas le même
+  `REALTIME_SECRET`. Sans `.env`, les deux valent `developpement-seulement`.
+- Le salon reste à « Chargement… » : `game:watch` ne répond pas, ou l'accusé
+  n'appelle pas `setGame`. Regardez l'onglet Messages : l'événement part-il ?
+- Un joueur reçoit l'état d'une autre partie : `game:watch` ne quitte pas les
+  salles `game:` précédentes, ou `useGame` ne vérifie pas `state.code`.
+- En conteneurs, le bandeau « Reconnexion… » ne disparaît jamais : le client
+  ne joint pas le service temps réel (`REALTIME_URL` du service `client`).

@@ -1,0 +1,134 @@
+---
+sidebar_position: 5
+sidebar_label: Le service temps réel
+description: "Quiz M9 en trois services : l'API reste la source de vérité, le service temps réel diffuse. Les annonces, le secret partagé, l'horloge des questions et le conteneur."
+---
+
+# Le service temps réel
+
+À la semaine 9, le temps réel de Quiz M9 sort de l'API et devient un
+**service à part** : son code (`realtime/`), son processus (port 3001), son
+conteneur.
+
+```text
+                     commandes (HTTP)
+  navigateur ─────────────────────────────▶ API ──── PostgreSQL
+      ▲                                      │  la vérité
+      │                                      │
+      │                                      │ POST /internal/games/:code
+      │ game:state, chat:message             │ (secret partagé)
+      │ (Socket.IO)                          ▼
+      └──────────────────────────── service temps réel
+                                       │ aucune base
+                                       └─▶ GET /api/games/:code
+                                           (l'état, pour le rattrapage)
+```
+
+## Deux règles
+
+**Les commandes passent par HTTP ; les nouvelles, par le socket.** Lancer la
+question suivante, répondre, s'inscrire : ce sont des `POST` vers l'API,
+comme avant. Ils ont une réponse, un code de statut, une autorisation, des
+tests. Le socket sert à **apprendre** que quelque chose a changé.
+
+**L'API reste la seule source de vérité.** Le service temps réel ne touche
+jamais à la base. Ce qu'il doit savoir, il le demande à l'API ; ce qu'il
+diffuse, l'API le lui annonce. Il peut redémarrer à tout moment sans rien
+perdre.
+
+## Pourquoi un service à part ?
+
+Une requête HTTP dure quelques millisecondes ; une connexion temps réel
+dure toute une partie. Les deux ne se gèrent pas pareil :
+
+- l'API se redéploie sans couper les parties en cours, et l'inverse ;
+- 500 joueurs, c'est 500 connexions ouvertes, mais très peu de requêtes :
+  on ajoute des instances de l'un sans ajouter des instances de l'autre ;
+- l'API reste **sans état** : n'importe quelle instance répond à n'importe
+  quelle requête. Le service temps réel, lui, a un état (qui est dans quelle
+  salle), et la semaine 13 montrera ce que ça change.
+
+## L'API annonce
+
+Après chaque changement (un joueur inscrit, une question ouverte ou close,
+une réponse reçue), l'API envoie le nouvel état au service temps réel :
+
+```js title="server/src/announce.js"
+await fetch(`${url}/internal/games/${code}`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+  body: JSON.stringify(await publicState(code)),
+  signal: AbortSignal.timeout(1000),
+});
+```
+
+Le service le diffuse à la salle de la partie :
+
+```js title="realtime/src/realtime.js"
+app.post('/internal/games/:code', (req, res) => {
+  if (req.get('authorization') !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Secret invalide.' });
+  }
+  io.to(`game:${req.params.code}`).emit('game:state', req.body);
+  res.status(204).end();
+});
+```
+
+Trois détails :
+
+- **Le secret partagé** (`REALTIME_SECRET`) : sans lui, n'importe qui pourrait
+  pousser un faux état à tous les joueurs. Il vit dans l'environnement des
+  deux services, jamais dans le dépôt.
+- **Un service temps réel en panne ne fait pas échouer la commande.** La base
+  est à jour ; `announce` attrape l'erreur et l'écrit dans la console. Les
+  clients rattraperont l'état en se reconnectant.
+- **On envoie l'état complet**, pas « ce qui a changé ». Un client qui a raté
+  une annonce est corrigé par la suivante.
+
+## Le service demande
+
+Le service temps réel n'a ni la base ni la clé des sessions. Pour le reste,
+il demande à l'API :
+
+- `GET /api/games/:code` : l'état d'une partie, pour l'envoyer à un client
+  qui arrive (le rattrapage) et pour vérifier qu'un pseudonyme est inscrit ;
+- `GET /api/games/:code/host`, **avec le cookie** reçu à la poignée de main :
+  ce compte est-il l'animateur de cette partie ? L'API répond 200, 401 ou
+  403. L'autorisation reste là où elle a toujours été.
+
+## Le travail caché du sondage
+
+Retirez le sondage, jouez une partie, et attendez la fin d'une question : le
+compte à rebours atteint 0, et **rien ne se passe**.
+
+Le sondage faisait un travail que personne n'avait remarqué. Chaque
+`GET /api/games/:code` appelait `closeQuestionIfExpired` : c'est la
+requête d'un joueur, une fois l'échéance passée, qui closait la question.
+Plus de requêtes, plus de clôture.
+
+Le serveur doit donc agir **sans qu'on le lui demande**. Quand une question
+s'ouvre, l'API programme sa clôture :
+
+```js title="server/src/clock.js"
+const delay = Math.max(0, deadline - Date.now()) + 10;
+timers.set(code, setTimeout(() => closeAndAnnounce(code), delay));
+```
+
+Une minuterie vit en mémoire : un redémarrage de l'API la perd. Au
+démarrage, `rearmTimers` en reprogramme une pour chaque partie restée en
+pleine question. L'échéance, elle, est dans la base.
+
+## En conteneur
+
+Quatre services dans `compose.yml`. Chacun joint les autres par leur **nom**
+sur le réseau de Compose :
+
+| Service | Joint | Variable |
+|---|---|---|
+| `api` | `http://realtime:3001` | `REALTIME_URL` |
+| `realtime` | `http://api:3000` | `API_URL` |
+| `client` | `http://api:3000` et `http://realtime:3001` | `API_URL`, `REALTIME_URL` |
+
+Le service temps réel n'a pas de port publié : le navigateur passe par le
+client, qui relaie `/socket.io` jusqu'à lui (Vite en développement,
+`client/server.js` en production).

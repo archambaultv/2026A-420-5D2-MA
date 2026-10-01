@@ -1,0 +1,185 @@
+---
+sidebar_position: 15
+sidebar_label: 14. WebSocket à la main
+description: "Semaine 7 : un serveur WebSocket sans bibliothèque. La poignée de main, la lecture et l'écriture des trames, la fermeture, puis un mini-clavardage."
+---
+
+# Exercice 14 : WebSocket à la main
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+Vous allez écrire un serveur WebSocket **sans bibliothèque**, avec
+`node:http` et des `Buffer`. Vous ne referez jamais ça en vrai : la semaine
+prochaine, `ws` le fera en une ligne. Mais vous saurez ce que fait cette
+ligne.
+
+Notes à garder ouvertes : [Sondage ou poussée](/notes_de_cours/temps_reel/sondage)
+et [Le protocole WebSocket](/notes_de_cours/temps_reel/protocole_websocket).
+
+## Jalon 0 : partir du bon pied
+
+```bash
+git checkout main
+git pull
+git checkout -b sem-07
+npm install
+```
+
+Le labo est dans `labo/ws-a-la-main/`, indépendant de Quiz M9 :
+
+| Fichier | |
+|---|---|
+| `trames.js` | trois fonctions à écrire : `acceptKey`, `decodeFrame`, `encodeFrame` |
+| `trames.test.js` | leurs tests, **fournis** : ils vous guident |
+| `serveur.js` | le serveur, à compléter |
+| `index.html` | la page du mini-clavardage, fournie |
+
+```bash
+npm run test:labo    # 8 tests, 8 échecs : c'est le point de départ
+```
+
+## Jalon 1 : observer un WebSocket qui existe déjà
+
+Vous utilisez un WebSocket depuis la semaine 1 sans le savoir : celui de
+Vite, qui recharge la page quand vous sauvegardez un fichier.
+
+1. `docker compose up -d postgres`, puis `npm run dev`, et ouvrez
+   [http://localhost:5173](http://localhost:5173).
+2. Outils de développement, onglet **Réseau**, filtre **WS** (ou
+   **Socket**), puis rechargez la page. Une connexion apparaît.
+3. Cliquez dessus. Dans **En-têtes**, trouvez le code de statut,
+   `Upgrade`, `Sec-WebSocket-Key` et `Sec-WebSocket-Accept`.
+4. Ouvrez l'onglet **Messages** (Firefox : **Réponse**), puis modifiez et
+   sauvegardez `client/app/styles.css`.
+
+**Prédire, avant l'étape 4 :** combien de requêtes HTTP Vite fait-il pour
+apprendre qu'un fichier a changé ?
+
+**Vérifier.** Le statut est `101 Switching Protocols`. Un message JSON
+arrive à la sauvegarde, et aucune requête HTTP ne l'a demandé : le serveur a
+parlé le premier. Arrêtez `npm run dev`.
+
+## Jalon 2 : la poignée de main
+
+- **Fichiers** : `labo/ws-a-la-main/trames.js`, `labo/ws-a-la-main/serveur.js`
+
+1. Écrivez `acceptKey(key)` : `base64(SHA-1(key + GUID))`. Dans Node :
+
+   ```js
+   createHash('sha1').update(texte).digest('base64')
+   ```
+
+2. Dans `serveur.js`, répondez à la demande de montée par la réponse 101 de
+   la note : quatre lignes séparées par `\r\n`, puis une **ligne vide**.
+   Écrivez-la avec `socket.write(...)`. N'ajoutez **pas**
+   `Sec-WebSocket-Extensions` : le navigateur proposerait de compresser les
+   trames, et elles deviendraient illisibles.
+
+```bash
+npm run labo        # http://localhost:4000
+```
+
+**Prédire :** que fera le navigateur si `Sec-WebSocket-Accept` est faux ?
+Essayez en ajoutant un caractère à la valeur.
+
+**Vérifier.** Le test `acceptKey` passe. Sur [http://localhost:4000](http://localhost:4000),
+l'état affiché passe à `OPEN`. Dans la console du navigateur :
+
+```js
+ws.readyState   // 1
+ws.send('allo')
+```
+
+Le terminal du serveur affiche `Trame reçue :` et des octets. Quels octets
+reconnaissez-vous ?
+
+## Jalon 3 : lire une trame
+
+- **Fichier** : `labo/ws-a-la-main/trames.js`
+
+Écrivez `decodeFrame(buffer)`, qui retourne `{ fin, opcode, masked, payload }`.
+Le commentaire en tête de `trames.js` donne la disposition des octets.
+Procédez dans l'ordre :
+
+1. `fin` et `opcode` : l'octet 0. `buffer[0] & 0x80` isole le premier bit,
+   `buffer[0] & 0x0f` les quatre derniers.
+2. `masked` et la longueur : l'octet 1. Si la longueur vaut 126, la vraie
+   longueur est `buffer.readUInt16BE(2)`, et tout le reste se décale de 2
+   octets.
+3. Le masque : 4 octets, puis les données. Chaque octet `i` des données se
+   démasque par `donnée[i] ^ masque[i % 4]`. Utilisez `Buffer.alloc(n)`
+   pour le résultat.
+
+Puis, dans `serveur.js`, décodez chaque trame reçue et affichez-la.
+
+**Prédire :** `ws.send('allo')` deux fois de suite. Les octets reçus
+sont-ils les mêmes les deux fois ? Pourquoi ?
+
+**Vérifier.** Les quatre tests `decodeFrame` passent. `ws.send('allo')`
+affiche une trame avec `opcode: 1`, `masked: true`, et un `payload` dont
+`.toString()` vaut `'allo'`.
+
+## Jalon 4 : écrire une trame
+
+- **Fichiers** : `labo/ws-a-la-main/trames.js`, `labo/ws-a-la-main/serveur.js`
+
+1. Écrivez `encodeFrame(opcode, payload)` : un en-tête de 2 octets (ou de 4
+   si la longueur dépasse 125), suivi des données, **sans masque**.
+   `Buffer.from([...])`, `Buffer.alloc(4)`, `writeUInt16BE` et
+   `Buffer.concat` suffisent.
+2. Dans `serveur.js`, renvoyez chaque message texte à son auteur : l'écho.
+
+**Vérifier.** `npm run test:labo` : tous les tests passent. Sur la page, un
+message envoyé s'affiche dans la liste : il a fait l'aller-retour.
+
+## Jalon 5 : fermer, puis clavarder
+
+- **Fichier** : `labo/ws-a-la-main/serveur.js`
+
+1. **Fermer.** Une trame d'opcode `0x8` demande la fermeture. Répondez par
+   une trame CLOSE qui porte le même code (les 2 premiers octets du
+   `payload` reçu), puis fermez le TCP : `socket.end(trame)`.
+2. **Clavarder.** Au lieu de renvoyer le message à son seul auteur,
+   renvoyez-le à toutes les connexions de `clients`.
+
+**Prédire :** dans la console, `ws.close(1000)`. Quel code l'événement
+`close` affichera-t-il sur la page ? Et si vous arrêtez le serveur avec
+`Ctrl+C` alors qu'une page est ouverte ?
+
+**Vérifier.** Deux onglets sur [http://localhost:4000](http://localhost:4000) : un message envoyé
+dans l'un s'affiche dans les deux. `ws.close(1000)` affiche `CLOSED (code
+1000)`. Un `Ctrl+C` du serveur affiche `CLOSED (code 1006)` : la connexion
+est tombée sans trame CLOSE.
+
+Votre voisin peut se joindre à vous : `http://<votre adresse IP>:4000` (si
+le pare-feu de Windows le permet).
+
+## Pour aller plus loin
+
+- **Ping.** Envoyez une trame `0x9` toutes les 10 secondes. Le navigateur
+  répond un pong (`0xA`) tout seul : affichez-le dans le terminal.
+- **Les longs messages.** La longueur 127 : 8 octets, `readBigUInt64BE`.
+- **Le flux TCP.** Le labo suppose qu'un événement `data` contient
+  exactement une trame. TCP ne garantit rien de tel : un gros message peut
+  arriver en plusieurs morceaux, et deux petits dans le même. Gardez les
+  octets reçus dans un tampon, et ne décodez une trame que lorsqu'elle est
+  complète.
+
+## En panne ?
+
+- `Error: À faire (jalon 2)` dans le terminal : une fonction de `trames.js`
+  n'est pas encore écrite. Le serveur s'arrête à la première trame reçue.
+- L'état reste à `CONNECTING`, puis passe à `CLOSED (code 1006)` : la
+  réponse 101 est incomplète. Il faut `\r\n` entre les lignes, **et** une
+  ligne vide à la fin (`\r\n\r\n`).
+- Une erreur de poignée de main qui mentionne `Sec-WebSocket-Accept` dans
+  la console du navigateur : la clé est mal calculée. Vérifiez le GUID, et que vous lisez bien
+  `req.headers['sec-websocket-key']`.
+- Le `payload` décodé est du charabia : le masque est lu au mauvais endroit
+  (après une longueur de 126, il commence à l'octet 4, pas 2).
+- `EADDRINUSE` : un autre `npm run labo` tourne déjà, dans un autre
+  terminal. Arrêtez-le.

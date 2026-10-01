@@ -1,0 +1,191 @@
+---
+sidebar_position: 2
+sidebar_label: Le protocole WebSocket
+description: "La poignée de main (101 Switching Protocols), les trames et leur masque, le cycle de vie d'une connexion, et la vérification de l'origine."
+---
+
+# Le protocole WebSocket
+
+WebSocket est défini par la [RFC 6455](https://www.rfc-editor.org/rfc/rfc6455).
+Une connexion WebSocket **commence en HTTP**, sur le même port, puis change
+de protocole et reste ouverte. Trois choses à comprendre : la poignée de
+main, les trames, la fermeture.
+
+## La poignée de main
+
+Le navigateur envoie une requête `GET` ordinaire, avec quelques en-têtes de
+plus :
+
+```http
+GET /ws HTTP/1.1
+Host: localhost:5173
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Version: 13
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Origin: http://localhost:5173
+Cookie: quizm9_session=...
+```
+
+`Upgrade: websocket` demande de changer de protocole. `Sec-WebSocket-Key`
+est une valeur aléatoire, différente à chaque connexion. Le cookie part
+comme pour n'importe quelle requête vers ce site.
+
+Le serveur qui accepte répond `101 Switching Protocols` :
+
+```http
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+```
+
+`Sec-WebSocket-Accept` se calcule à partir de la clé reçue :
+
+```text
+base64( SHA-1( Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" ) )
+```
+
+La constante est la même pour tous les serveurs du monde. Le navigateur
+refait le calcul et ferme la connexion si le résultat diffère. Ce n'est pas
+de la sécurité : c'est la preuve que le serveur comprend vraiment WebSocket,
+et qu'un serveur HTTP ordinaire ou une cache n'a pas répondu à sa place.
+
+**Après la ligne vide qui termine la réponse 101, il n'y a plus de HTTP.**
+La même connexion TCP reste ouverte, et les deux côtés s'y échangent des
+**trames**. Il n'y a plus de requête ni de réponse, plus de méthode, plus de
+code de statut : n'importe quel côté écrit quand il veut.
+
+```text
+navigateur                                serveur
+    │  GET /ws, Upgrade: websocket           │
+    │ ─────────────────────────────────────▶ │
+    │  101 Switching Protocols               │
+    │ ◀───────────────────────────────────── │
+    │                                        │   fin du HTTP
+    │  trame « Bonjour »                     │
+    │ ─────────────────────────────────────▶ │
+    │  trame « Question 2 »                  │   le serveur parle
+    │ ◀───────────────────────────────────── │   sans qu'on lui demande
+    │  trame CLOSE 1000                      │
+    │ ─────────────────────────────────────▶ │
+    │  trame CLOSE 1000                      │
+    │ ◀───────────────────────────────────── │
+```
+
+## Les trames
+
+Un message est transporté dans une trame, avec un en-tête de 2 à 14 octets :
+
+| Octet | Bits | Contenu |
+|---|---|---|
+| 0 | 1 | **FIN** : 1 si c'est la dernière trame du message |
+| 0 | 3 | réservés (extensions), à 0 |
+| 0 | 4 | **opcode** : le type de trame |
+| 1 | 1 | **MASK** : 1 si les données sont masquées |
+| 1 | 7 | **longueur** : de 0 à 125 ; 126, la longueur suit sur 2 octets ; 127, sur 8 |
+| suivants | 32 | la **clé de masque**, seulement si MASK vaut 1 |
+| suivants | | les **données** (*payload*) |
+
+Les opcodes à connaître :
+
+| Opcode | Trame |
+|---|---|
+| `0x1` | texte (UTF-8) |
+| `0x2` | binaire |
+| `0x8` | fermeture (CLOSE) |
+| `0x9` | ping |
+| `0xA` | pong |
+
+Le message « Hello » envoyé par le serveur tient en 7 octets :
+
+```text
+81 05 48 65 6c 6c 6f
+│  │  └─ H  e  l  l  o
+│  └─ MASK 0, longueur 5
+└─ FIN 1, opcode 0x1 (texte)
+```
+
+Comparez à une requête HTTP de sondage : quelques centaines d'octets
+d'en-têtes, à chaque fois.
+
+### Le masque
+
+**Toute trame du navigateur vers le serveur est masquée ; aucune trame du
+serveur vers le navigateur ne l'est.** Le navigateur tire 4 octets au hasard
+et fait un XOR de chaque octet des données avec un octet de la clé, à tour
+de rôle :
+
+```js
+payload[i] = masked[i] ^ mask[i % 4];
+```
+
+Ce n'est pas du chiffrement : la clé voyage dans la trame, juste devant les
+données. Le masque empêche une page malveillante de choisir les octets
+exacts qui passent sur le réseau, et donc de fabriquer des octets qu'un vieux
+mandataire (*proxy*) prendrait pour une requête HTTP et mettrait en cache.
+
+Pour la confidentialité, c'est `wss://` : WebSocket par-dessus TLS, comme
+`https://` pour HTTP.
+
+## Le cycle de vie
+
+Côté navigateur, `ws.readyState` vaut :
+
+| Valeur | État | |
+|---|---|---|
+| 0 | `CONNECTING` | poignée de main en cours ; `send` lève une erreur |
+| 1 | `OPEN` | on peut envoyer et recevoir |
+| 2 | `CLOSING` | une trame CLOSE est partie, on attend celle de l'autre |
+| 3 | `CLOSED` | terminé |
+
+**Fermer proprement**, c'est échanger des trames CLOSE : un côté envoie la
+sienne avec un code, l'autre répond, puis la connexion TCP se ferme. Les
+codes à reconnaître :
+
+| Code | Sens |
+|---|---|
+| 1000 | fermeture normale |
+| 1001 | départ : onglet fermé, serveur qui s'arrête |
+| 1006 | **anormale** : la connexion est tombée sans trame CLOSE. Ce code n'est jamais envoyé ; le navigateur le rapporte quand il n'a rien reçu |
+| 1008 | refusé par la politique du serveur |
+| 1011 | erreur interne du serveur |
+
+### Ping et pong
+
+Une connexion TCP peut mourir sans prévenir : un téléphone qui perd le
+réseau, un portable qui se met en veille. Aucun des deux côtés n'en sait
+rien tant qu'il n'essaie pas d'écrire. Le serveur envoie donc un **ping** de
+temps en temps ; le navigateur répond **pong** automatiquement. Pas de pong
+après un délai : la connexion est morte, on la ferme.
+
+## L'origine : CORS ne protège pas un WebSocket
+
+Une page de `site-piege.example` peut ouvrir un WebSocket vers Quiz M9 :
+
+```js
+new WebSocket('wss://quizm9.example/ws');
+```
+
+Le navigateur y joint le cookie de Quiz M9, comme il l'a fait pour le
+[CSRF](/notes_de_cours/securite/csrf). Mais cette fois, **CORS ne s'applique
+pas** : la page piégée peut lire tout ce que le serveur répond. C'est le
+détournement de WebSocket entre sites (CSWSH, *cross-site WebSocket
+hijacking*).
+
+La défense est au serveur. Le navigateur envoie **toujours** l'en-tête
+`Origin` dans la poignée de main, et une page ne peut pas le falsifier. Le
+serveur refuse la montée si l'origine n'est pas la sienne :
+
+```js
+const origin = req.headers.origin;
+if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+  socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+  return;
+}
+```
+
+Un client qui n'est pas un navigateur (`curl`, un test, un script) peut
+mettre l'`Origin` qu'il veut, ou n'en mettre aucun. Ce n'est pas grave : il
+n'a pas le cookie de la victime. La vérification protège les **navigateurs**
+de nos utilisateurs, et c'est d'eux que vient le risque.
