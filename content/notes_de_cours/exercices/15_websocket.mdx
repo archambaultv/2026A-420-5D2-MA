@@ -1,0 +1,82 @@
+---
+sidebar_position: 15
+sidebar_label: 14. Le protocole WebSocket
+description: "Semaine 7 : le protocole WebSocket"
+---
+
+# Exercice 14 : Le protocole WebSocket
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+## Résumé de l'activité
+
+Cette activité se déroule en deux parties et la classe sera divisée en deux
+groupes.
+
+- Un groupe se concentre sur la théorie du protocole WebSocket et l'autre sur
+  son implémentation dans une application web (Node.js côté serveur).
+- Enfin, chaque groupe présentera à la classe ce qu'il a appris.
+
+## Partie 1 : Apprendre le protocole
+
+Cette partie dure 2h00. Chaque groupe va se concentrer sur un aspect du
+protocole WebSocket et l'expliquer aux autres par la suite avec une courte
+présentation d'environ 15 minutes.
+
+Vous pouvez bien sûr commencer par avoir une vue d'ensemble du protocole, mais
+vous devez ensuite vous concentrer sur l'aspect qui vous a été assigné.
+
+:::tip
+
+N'oubliez pas de préparer un support visuel pour votre présentation et de citer
+vos sources.
+
+:::
+
+### Groupe 1 : Le protocole
+
+Votre groupe explique le problème que WebSocket résout, l'ouverture de la
+connexion et la façon dont les messages circulent ensuite.
+
+Points à couvrir :
+
+- les limites du modèle requête-réponse de HTTP pour les applications en temps
+  réel
+- la requête d'ouverture (`Upgrade`, `Connection`, `Sec-WebSocket-Key`) et la
+  réponse `101 Switching Protocols`
+- pourquoi WebSocket commence-t-il par une requête HTTP ?
+- la différence entre un message et une trame (*frame*)
+- les types de trames : texte, binaire, `close`, `ping` et `pong`
+- la fermeture de la connexion et les principaux codes de fermeture (ex. 1000, 1006)
+- comment l'application distingue-t-elle les types de messages (ex. JSON avec
+  un champ `type`) ?
+- quels problèmes une connexion ouverte longtemps peut-elle causer (ex. proxy,
+  load balancer) ?
+
+### Groupe 2 : Implémentation et utilisation
+
+Votre groupe explique comment utiliser WebSocket dans une application web, côté
+client avec l'API du navigateur et côté serveur avec Node.js.
+
+Points à couvrir :
+
+- l'API `WebSocket` du navigateur : le constructeur, les URL `ws://` et
+  `wss://`, la méthode `send` et la propriété `readyState`
+- les événements `open`, `message`, `error` et `close`
+- côté serveur : créer un `WebSocketServer` et le greffer au même serveur HTTP
+  qu'Express
+- envoyer un message à un seul client ou à tous les clients connectés
+- détecter une connexion morte avec `ping` et `pong`
+- le navigateur ne se reconnecte pas tout seul : comment gérer la reconnexion ?
+- l'authentification : l'API du navigateur ne permet pas d'ajouter des en-têtes,
+  alors comment le serveur sait-il qui est connecté ?
+- comment observer les messages échangés avec les outils de développement du
+  navigateur ?
+
+## Partie 2 : Présentation à la classe
+
+Chaque groupe présentera à la classe ce qu'il a appris. Cette partie dure 1h00.
