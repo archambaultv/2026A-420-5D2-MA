@@ -1,0 +1,411 @@
+---
+sidebar_position: 2
+sidebar_label: WebSocket en pratique
+description: "WebSocket dans une application web."
+---
+
+# WebSocket en pratique
+
+Cette page montre le code d'une connexion WebSocket, côté navigateur et côté
+serveur Node.js.
+
+## Côté navigateur : l'API `WebSocket`
+
+Le navigateur fournit la classe `WebSocket`, sans rien installer.
+
+### Ouvrir une connexion
+
+```js
+const ws = new WebSocket('ws://localhost:5173/ws');
+```
+
+L'URL commence par `ws://`, ou `wss://` pour une connexion chiffrée (comme
+`http://` et `https://`). Une page en HTTPS **doit** utiliser `wss://`, sinon
+le navigateur refuse.
+
+Plutôt que d'écrire l'adresse en dur, on la construit à partir de la page :
+
+```js
+// Même hôte que la page ; wss: si la page est en HTTPS.
+const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+```
+
+Le constructeur retourne tout de suite : la connexion s'ouvre **en arrière-plan**.
+
+### Les quatre événements
+
+```js
+ws.addEventListener('open', () => {
+  // La connexion est prête : on peut envoyer.
+  ws.send(JSON.stringify({ type: 'join', code: '747311', nickname: 'Bob' }));
+});
+
+ws.addEventListener('message', (event) => {
+  // event.data est une chaîne (trame texte).
+  const message = JSON.parse(event.data);
+  console.log('Reçu :', message);
+});
+
+ws.addEventListener('close', (event) => {
+  console.log('Fermée :', event.code, event.reason);
+});
+
+ws.addEventListener('error', () => {
+  // Aucun détail sur l'erreur, par sécurité. Un 'close' suit toujours.
+});
+```
+
+| Événement | Quand | À retenir |
+|---|---|---|
+| `open` | la poignée de main a réussi (`101`) | le premier moment où `send` fonctionne |
+| `message` | un message complet est arrivé | `event.data` : une chaîne, à passer à `JSON.parse` |
+| `error` | quelque chose a échoué | ne dit pas quoi ; toujours suivi de `close` |
+| `close` | la connexion est fermée | `event.code` (1000, 1006…) et `event.reason` |
+
+On peut aussi écrire `ws.onmessage = (event) => { … }` : c'est équivalent,
+pour un seul gestionnaire par événement.
+
+### Envoyer et `readyState`
+
+`ws.send(texte)` envoie un message. On envoie du texte, donc les objets
+passent par `JSON.stringify`.
+
+`send` ne fonctionne que si la connexion est ouverte. La propriété
+`readyState` dit où elle en est :
+
+| Valeur | Constante | État |
+|---|---|---|
+| `0` | `WebSocket.CONNECTING` | poignée de main en cours |
+| `1` | `WebSocket.OPEN` | ouverte : `send` fonctionne |
+| `2` | `WebSocket.CLOSING` | fermeture en cours |
+| `3` | `WebSocket.CLOSED` | fermée, définitivement |
+
+Appeler `send` pendant `CONNECTING` lance une erreur (`InvalidStateError`).
+Après `CLOSED`, le message est perdu sans erreur. D'où la vérification :
+
+```js
+if (ws.readyState === WebSocket.OPEN) {
+  ws.send(JSON.stringify({ type: 'chat', text }));
+}
+```
+
+Une connexion fermée ne se rouvre jamais : il faut créer un nouvel objet
+`WebSocket` (voir [La reconnexion](#la-reconnexion)).
+
+### Fermer
+
+```js
+ws.close();                       // code 1000
+ws.close(4001, 'Partie terminée'); // un code de l'application (4000 à 4999)
+```
+
+Le navigateur n'accepte que `1000` ou un code de `3000` à `4999`.
+
+## Côté serveur : la bibliothèque `ws`
+
+Node.js n'a pas de serveur WebSocket intégré. La bibliothèque la plus
+utilisée est [`ws`](https://github.com/websockets/ws) :
+
+```bash
+npm install ws
+```
+
+### Partager le port d'Express
+
+Le serveur WebSocket n'a pas besoin de son propre port. `app.listen` retourne
+le serveur HTTP d'Express ; on y greffe le serveur WebSocket :
+
+```js title="server/src/server.js"
+import { app } from './app.js';
+import { WebSocketServer } from 'ws';
+
+const server = app.listen(3000);
+
+// Le même serveur HTTP accepte aussi les connexions WebSocket, sur /ws.
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+wss.on('connection', (ws, req) => {
+  // Une connexion vient de s'ouvrir. `ws` la représente ; `req` est la
+  // requête HTTP d'ouverture (URL, en-têtes, cookies).
+
+  ws.on('message', (data) => {
+    const message = JSON.parse(data.toString());
+    // …
+  });
+
+  ws.on('close', (code, reason) => {
+    // La connexion est fermée : on fait le ménage.
+  });
+
+  // Sans gestionnaire 'error', une trame invalide fait planter Node.
+  ws.on('error', console.error);
+});
+```
+
+Le partage se fait ainsi :
+
+- une requête ordinaire (`GET /api/…`) va à Express, comme avant ;
+- une requête d'ouverture (`Upgrade: websocket`) sur `/ws` va à `wss`, qui
+  répond `101` et déclenche `connection` ;
+- une requête d'ouverture sur un autre chemin reçoit un `400`.
+
+Le chemin `/ws` est une convention, pas une exigence du protocole. On peut en
+choisir un autre, à condition d'utiliser le même côté client et côté serveur.
+
+Attention, côté serveur `data` est un `Buffer` (des octets), pas une chaîne :
+`data.toString()` le décode.
+
+### Garder des informations sur une connexion
+
+La fonction passée à `connection` est appelée **une fois par connexion**. Ses
+variables locales appartiennent donc à cette connexion seulement :
+
+```js
+wss.on('connection', (ws, req) => {
+  let nickname = null; // propre à CETTE connexion
+
+  ws.on('message', (data) => {
+    const message = JSON.parse(data.toString());
+    if (message.type === 'join') {
+      nickname = message.nickname;
+    }
+    // Les messages suivants de cette connexion connaissent son pseudonyme.
+  });
+});
+```
+
+### Envoyer à un client, à tous, à un groupe
+
+**À un seul client**, celui qui vient d'écrire :
+
+```js
+ws.send(JSON.stringify({ type: 'error', error: 'Partie introuvable.' }));
+```
+
+**À tous les clients connectés** : `wss.clients` est l'ensemble des
+connexions ouvertes.
+
+```js
+import { WebSocket } from 'ws';
+
+function broadcast(message) {
+  const json = JSON.stringify(message); // une seule fois, pas une par client
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(json);
+    }
+  }
+}
+```
+
+**À un groupe** (les joueurs d'une même partie) : `ws` ne connaît pas les
+groupes, on les tient nous-mêmes dans une `Map` :
+
+```js
+/** Les groupes : code de partie → ensemble des connexions. */
+const rooms = new Map();
+
+function join(code, ws) {
+  if (!rooms.has(code)) rooms.set(code, new Set());
+  rooms.get(code).add(ws);
+}
+
+function leave(code, ws) {
+  const room = rooms.get(code);
+  if (!room) return;
+  room.delete(ws);
+  if (room.size === 0) rooms.delete(code);
+}
+
+function broadcastToRoom(code, message) {
+  const json = JSON.stringify(message);
+  for (const client of rooms.get(code) ?? []) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(json);
+    }
+  }
+}
+```
+
+Le `leave` dans `ws.on('close', …)` est indispensable. Sans lui, chaque
+onglet fermé reste dans la `Map` pour toujours : la mémoire grossit et le
+serveur écrit à des connexions mortes.
+
+### Valider chaque message
+
+Un client peut envoyer n'importe quoi. Le serveur vérifie tout, et répond une
+erreur plutôt que de planter :
+
+```js
+ws.on('message', (data) => {
+  let message;
+  try {
+    message = JSON.parse(data.toString());
+  } catch {
+    return ws.send(JSON.stringify({ type: 'error', error: 'Message illisible.' }));
+  }
+
+  if (message.type === 'chat') {
+    const text = typeof message.text === 'string' ? message.text.trim() : '';
+    if (text === '' || text.length > 200) {
+      return ws.send(JSON.stringify({ type: 'error', error: 'Message invalide.' }));
+    }
+    // …
+  }
+});
+```
+
+L'option `maxPayload` de `WebSocketServer` refuse en plus les messages trop
+gros avant même de les lire (par défaut, 100 Mio).
+
+## Détecter une connexion morte : `ping` et `pong`
+
+Une connexion peut disparaître sans trame `close` (Wi-Fi coupé, téléphone en
+veille). Le serveur l'apprend en envoyant régulièrement un `ping` : le
+navigateur répond `pong` **tout seul**, sans une ligne de code de notre part.
+Une connexion qui n'a pas répondu au `ping` précédent est morte.
+
+```js
+wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
+  // …
+});
+
+// Toutes les 30 secondes : on coupe les connexions muettes, on sonde les autres.
+const interval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws.isAlive) {
+      ws.terminate(); // coupe sans échange de 'close' ; déclenche 'close'
+      continue;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, 30_000);
+
+wss.on('close', () => clearInterval(interval));
+```
+
+Ce `ping` régulier a un deuxième effet : la connexion n'est jamais
+silencieuse, donc les mandataires ne la coupent pas.
+
+Le JavaScript du navigateur, lui, ne peut ni envoyer de `ping` ni voir les
+`pong`. Si le client veut vérifier la connexion de son côté, il faut un
+message de l'application, par exemple `{ "type": "ping" }`.
+
+## La reconnexion
+
+Le navigateur **ne se reconnecte jamais tout seul**. Après un `close`, l'objet
+`WebSocket` est mort et il faut en créer un nouveau. La recette :
+
+1. sur `close`, attendre un peu, puis rappeler la fonction qui se connecte ;
+2. attendre **de plus en plus longtemps** à chaque échec (1 s, 2 s, 4 s…,
+   jusqu'à 30 s), pour ne pas marteler un serveur en panne ;
+3. ajouter un peu de **hasard** au délai : après un redémarrage du serveur,
+   tous les clients ne reviennent pas à la même milliseconde ;
+4. ne **pas** se reconnecter quand c'est nous qui avons fermé exprès.
+
+```js
+let ws = null;
+let attempts = 0;
+let stopped = false;
+
+function connect() {
+  ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+  ws.addEventListener('open', () => {
+    attempts = 0;
+    // Une nouvelle connexion ne sait rien : on se réannonce.
+    ws.send(JSON.stringify({ type: 'join', code, nickname }));
+  });
+
+  ws.addEventListener('close', () => {
+    if (stopped) return;
+    const delay = Math.min(1000 * 2 ** attempts, 30_000) + Math.random() * 1000;
+    attempts++;
+    setTimeout(connect, delay);
+  });
+}
+
+connect();
+
+// Plus tard, pour fermer pour de bon :
+// stopped = true; ws.close();
+```
+
+Deux conséquences à prévoir :
+
+- **Le serveur a oublié la connexion précédente.** Pour lui, c'est un nouveau
+  client : le client doit se réannoncer (le `join` dans `open`).
+- **Les messages envoyés pendant la coupure sont perdus**, dans les deux sens.
+  Le client doit donc pouvoir récupérer l'état courant après la reconnexion :
+  par exemple, le serveur envoie l'état complet de la partie en réponse au
+  `join`, puis seulement les changements.
+
+Des bibliothèques comme Socket.IO font ce travail automatiquement. Le
+comprendre une fois à la main aide à savoir ce qu'elles font.
+
+## Savoir qui est connecté
+
+L'API `WebSocket` du navigateur **ne permet pas d'ajouter des en-têtes** : pas
+de `Authorization: Bearer …` comme avec `fetch`. Trois façons de s'en sortir.
+
+**Le cookie de session (la plus simple).** La requête d'ouverture est une
+requête HTTP vers notre site : le navigateur y joint les cookies, comme
+d'habitude. Le serveur la reçoit dans `req` et lit la session avec les mêmes
+fonctions que les routes Express. Dans Quiz M9, c'est `currentAccount(req)`
+(`server/src/auth.js`) :
+
+```js
+import { currentAccount } from './auth.js';
+
+wss.on('connection', (ws, req) => {
+  ws.on('message', async (data) => {
+    const message = JSON.parse(data.toString());
+    if (message.type === 'join') {
+      // req est la requête d'ouverture : elle porte le cookie de session.
+      const account = await currentAccount(req); // null si personne
+      // …
+    }
+  });
+});
+```
+
+Placez les `ws.on(…)` **avant** tout `await` dans `connection` : un message
+qui arrive avant que le gestionnaire soit attaché est perdu.
+
+**Un jeton dans l'URL**, `new WebSocket('wss://…/ws?token=…')`, quand le
+cookie n'est pas possible (autre domaine, application mobile). Le jeton doit
+être de courte durée : les URL finissent dans les journaux des serveurs.
+
+**Un premier message d'authentification**, `{ "type": "auth", "token": … }`.
+Le serveur refuse tout autre message tant que celui-ci n'est pas validé.
+
+### Vérifier l'`Origin`
+
+Le cookie part tout seul, et **CORS ne s'applique pas aux WebSocket** : une
+page d'un autre site peut ouvrir une connexion vers notre serveur, avec le
+cookie de l'utilisateur. C'est le même danger que le
+[CSRF](/notes_de_cours/securite/csrf). La défense : le navigateur envoie
+toujours l'en-tête `Origin` (la page qui ouvre la connexion), et il est
+impossible à falsifier depuis une page web. Le serveur le vérifie :
+
+```js
+const ALLOWED_ORIGINS = ['http://localhost:5173'];
+
+wss.on('connection', (ws, req) => {
+  if (!ALLOWED_ORIGINS.includes(req.headers.origin)) {
+    ws.close(1008, 'Origine refusée');
+    return;
+  }
+  // …
+});
+```
+
+Un script Node.js ou curl peut envoyer n'importe quelle `Origin` : cette
+vérification protège les utilisateurs d'un navigateur, elle ne remplace pas
+l'authentification.

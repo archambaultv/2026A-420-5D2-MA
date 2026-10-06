@@ -1,0 +1,301 @@
+---
+sidebar_position: 1
+sidebar_label: Le protocole WebSocket
+description: "Pourquoi WebSocket, la poignée de main HTTP, les trames, la fermeture et les pièges d'une connexion qui reste ouverte."
+---
+
+# Le protocole WebSocket
+
+WebSocket est une connexion **ouverte en permanence** entre le navigateur et
+le serveur, dans laquelle **les deux côtés peuvent parler quand ils veulent**.
+Cette page explique ce qui circule sur le réseau. La suivante, [WebSocket en
+pratique](protocole_websocket_pratique), montre le code.
+
+## Le problème : HTTP ne parle que quand on lui parle
+
+En HTTP, c'est toujours le client qui commence : une requête, une réponse,
+fin. Le serveur ne peut **jamais** envoyer quelque chose de lui-même.
+
+Pour un jeu en direct comme Quiz M9, c'est un problème : quand l'animateur
+lance une question, le serveur voudrait prévenir tous les joueurs tout de
+suite. Il ne peut pas. Alors depuis la semaine 1, chaque navigateur demande
+l'état de la partie **toutes les secondes** (`client/app/useGame.js`) :
+
+```
+navigateur                         serveur
+   │── GET /api/games/747311 ──────►│
+   │◄──────────── 200 (rien de neuf)│
+   │        ... une seconde ...     │
+   │── GET /api/games/747311 ──────►│
+   │◄──────────── 200 (rien de neuf)│
+   │        ... une seconde ...     │   ← l'animateur lance la question ici
+   │── GET /api/games/747311 ──────►│
+   │◄─────────── 200 (la question!) │   ← le joueur la voit jusqu'à 1 s plus tard
+```
+
+C'est le **sondage** (*polling*). Il a deux défauts :
+
+- **la latence** : une nouvelle attend jusqu'à une seconde avant d'être vue ;
+- **le gaspillage** : 30 joueurs font 30 requêtes par seconde, soit 1800 par
+  minute, presque toutes pour entendre « rien de neuf ». Chaque requête
+  transporte aussi ses en-têtes (cookie compris), souvent plus lourds que la
+  réponse elle-même.
+
+Sonder plus souvent réduit la latence, mais augmente le gaspillage. Il faut
+une connexion où le serveur peut parler en premier : c'est WebSocket.
+
+```
+navigateur                         serveur
+   │── ouverture (une seule fois) ─►│
+   │◄═══════ connexion ouverte ════►│
+   │                                │   ← l'animateur lance la question
+   │◄──────────── { la question }   │   ← le joueur la reçoit tout de suite
+   │── { ma réponse } ─────────────►│
+```
+
+## L'ouverture : une requête HTTP qui change de protocole
+
+Une connexion WebSocket **commence par une requête HTTP ordinaire**, un `GET`
+qui demande au serveur de changer de protocole. C'est la **poignée de main**
+(*handshake*).
+
+Le navigateur envoie :
+
+```http
+GET /ws HTTP/1.1
+Host: localhost:3000
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Version: 13
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Origin: http://localhost:5173
+Cookie: quizm9_session=eyJhY2NvdW50SWQiOjEs…
+```
+
+| En-tête | Rôle |
+|---|---|
+| `Upgrade: websocket` | « je veux passer au protocole WebSocket » |
+| `Connection: Upgrade` | « cette connexion va changer de protocole » |
+| `Sec-WebSocket-Version: 13` | la version du protocole (13 depuis 2011) |
+| `Sec-WebSocket-Key` | 16 octets aléatoires en base64, différents à chaque connexion |
+| `Origin` | la page qui ouvre la connexion (important pour la sécurité) |
+| `Cookie` | les cookies du site, envoyés comme pour toute requête |
+
+Si le serveur accepte, il répond **`101 Switching Protocols`** :
+
+```http
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+```
+
+`Sec-WebSocket-Accept` est calculé à partir de la clé reçue :
+
+```js
+base64(SHA1(cléReçue + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'));
+```
+
+La chaîne `258EAFA5-…` est une constante fixée par la norme (RFC 6455). Le
+navigateur refait le calcul ; si le résultat ne correspond pas, il abandonne
+la connexion. Ce n'est **pas** une mesure de sécurité : ça prouve seulement
+que le serveur comprend vraiment WebSocket et n'est pas un vieux serveur ou
+une cache qui renvoie une réponse au hasard.
+
+Après la ligne vide qui termine la réponse 101, **ce n'est plus du HTTP**. La
+même connexion TCP reste ouverte et transporte maintenant des **trames**
+WebSocket, dans les deux sens.
+
+Si le serveur refuse (mauvaise adresse, `Origin` refusée, utilisateur non
+connecté), il répond un code HTTP ordinaire (`400`, `403`…) et la connexion
+s'arrête là.
+
+### Pourquoi commencer par HTTP ?
+
+- **Les ports.** WebSocket passe par les ports 80 et 443, comme le web. Les
+  pare-feux d'entreprise et de réseaux publics les laissent déjà passer.
+- **Le même serveur.** Un seul serveur, sur un seul port, sert les pages,
+  l'API et les connexions WebSocket. Il lui suffit de reconnaître l'en-tête
+  `Upgrade`.
+- **Les acquis de HTTP.** La requête d'ouverture porte l'URL, l'`Origin` et
+  les cookies. Le serveur sait donc **qui** se connecte et **d'où**, avec les
+  mêmes outils que pour le reste de l'application.
+- **Le chiffrement.** `wss://` est à `ws://` ce que `https://` est à
+  `http://` : le même TLS, le même certificat.
+
+### À essayer : provoquer la poignée de main avec curl
+
+Avec un serveur WebSocket qui écoute sur `/ws`, on peut envoyer la requête
+d'ouverture à la main :
+
+```bash
+curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" http://localhost:3000/ws
+```
+
+On voit la réponse
+`101` et son `Sec-WebSocket-Accept`, puis curl reste bloqué : la connexion est
+ouverte, mais curl ne sait pas lire des trames. `Ctrl+C` pour quitter. Retirez
+l'en-tête `Upgrade` et le serveur répond un code d'erreur ordinaire.
+
+## Messages et trames
+
+L'application envoie et reçoit des **messages** : un texte, un objet JSON, un
+fichier. Sur le réseau, chaque message voyage dans une ou plusieurs
+**trames** (*frames*), de petits paquets avec un en-tête de quelques octets.
+
+```
+message « Bonjour à tous »
+          │
+          ▼
+┌──────────────────────┬─────────────────────────┐
+│ en-tête (2 à 14 o)   │ données (payload)       │
+│ FIN, type, longueur, │ « Bonjour à tous »      │
+│ masque               │ en UTF-8                │
+└──────────────────────┴─────────────────────────┘
+```
+
+L'en-tête contient surtout :
+
+- **FIN** : 1 si c'est la dernière trame du message. Un gros message peut être
+  découpé en plusieurs trames ; les suivantes sont des trames de
+  **continuation**, et la dernière a `FIN = 1`.
+- **le type** de la trame (l'*opcode*, voir plus bas) ;
+- **la longueur** des données ;
+- **le masque** : les trames du navigateur vers le serveur sont toujours
+  **masquées** (brouillées avec une clé aléatoire de 4 octets). Ce n'est pas du
+  chiffrement, la clé voyage avec la trame : ça empêche une page malveillante
+  de fabriquer des octets qui tromperaient une cache sur le chemin. Les trames
+  du serveur vers le navigateur ne sont jamais masquées.
+
+Comparez avec le sondage : une requête HTTP porte des centaines d'octets
+d'en-têtes. Une trame WebSocket en porte 2 à 14.
+
+En pratique, **on ne manipule jamais les trames** : le navigateur et la
+bibliothèque du serveur les assemblent pour nous. Le code de l'application ne
+voit que des messages complets.
+
+### Les types de trames
+
+| Opcode | Type | Usage |
+|---|---|---|
+| `0x1` | texte | un message en UTF-8, le plus courant (JSON) |
+| `0x2` | binaire | des octets bruts (image, fichier, son) |
+| `0x0` | continuation | la suite d'un message découpé |
+| `0x8` | `close` | « je ferme la connexion », avec un code et une raison |
+| `0x9` | `ping` | « es-tu toujours là ? » |
+| `0xA` | `pong` | « oui » (réponse obligatoire à un `ping`) |
+
+Les trois dernières sont des trames de **contrôle** : elles gèrent la
+connexion et ne transportent pas de données de l'application. Elles sont
+courtes (125 octets au maximum) et peuvent s'intercaler entre les trames d'un
+message découpé.
+
+## La fermeture
+
+Une connexion se ferme proprement par un échange de trames `close` :
+
+```
+navigateur                                  serveur
+   │── close (1000, « Au revoir ») ───────────►│
+   │◄─────────────────────── close (1000) ─────│
+   │           la connexion TCP se ferme       │
+```
+
+Celui qui ferme envoie une trame `close` avec un **code** et une raison
+facultative ; l'autre répond par une trame `close`, puis la connexion TCP est
+fermée. N'importe lequel des deux côtés peut commencer.
+
+Les codes à connaître :
+
+| Code | Signification | Exemple |
+|---|---|---|
+| `1000` | fermeture normale | le joueur quitte la partie |
+| `1001` | départ | l'onglet se ferme, le serveur redémarre |
+| `1006` | fermeture anormale | le Wi-Fi coupe, le serveur plante |
+| `1008` | violation de politique | `Origin` refusée, utilisateur non autorisé |
+| `1009` | message trop gros | |
+| `1011` | erreur interne du serveur | |
+| `4000` à `4999` | réservés à votre application | `4001` : partie terminée |
+
+Le code `1006` est spécial : il n'est **jamais envoyé** sur le réseau. C'est
+le navigateur qui l'attribue quand la connexion TCP a disparu **sans** trame
+`close`. C'est le code que vous verrez le plus souvent en développement :
+chaque fois que vous arrêtez ou relancez le serveur Node (`node --watch`), les
+navigateurs ouverts reçoivent un `close` avec le code `1006`.
+
+## Un protocole par-dessus le protocole
+
+WebSocket transporte du texte ou des octets. Il ne dit rien de leur
+**signification** : c'est à l'application de définir ses propres messages.
+La façon la plus courante est du JSON avec un champ **`type`** :
+
+```js
+// du navigateur vers le serveur
+{ "type": "join", "code": "747311", "nickname": "Bob" }
+{ "type": "answer", "choiceId": 12 }
+
+// du serveur vers le navigateur
+{ "type": "question", "text": "Capitale du Canada ?", "choices": [ … ] }
+{ "type": "error", "error": "Partie introuvable." }
+```
+
+Chaque côté lit le `type` et choisit quoi faire, un peu comme une route
+Express choisit son traitement selon la méthode et l'URL :
+
+```js
+const message = JSON.parse(data);
+if (message.type === 'join') {
+  // …
+} else if (message.type === 'answer') {
+  // …
+} else {
+  // type inconnu : on répond une erreur
+}
+```
+
+Deux règles :
+
+- **Documentez le protocole** : la liste des messages possibles, dans chaque
+  sens, avec leurs champs.  Sans
+  elle, le client et le serveur divergent vite.
+- **Ne faites jamais confiance à un message reçu.** N'importe qui peut ouvrir
+  une connexion et envoyer n'importe quoi : du JSON invalide, un `type`
+  inconnu, un texte de 10 Mo. Le serveur valide chaque message, comme il
+  valide le corps d'un `POST`.
+
+## Les pièges d'une connexion qui reste ouverte
+
+Une requête HTTP dure quelques millisecondes. Une connexion WebSocket peut
+durer des heures. Ça change plusieurs choses.
+
+**Les intermédiaires coupent les connexions silencieuses.** Entre le
+navigateur et le serveur, il y a souvent un  proxy, un
+répartiteur de charge (*load balancer*) ou un routeur. Beaucoup ferment une
+connexion qui n'a rien transmis depuis un certain temps (souvent 60
+secondes), sans prévenir personne. D'où les trames `ping` et `pong` : en
+envoyant un `ping` toutes les 30 secondes, le serveur garde la connexion
+active et détecte celles qui sont mortes.
+
+**Une connexion peut mourir sans le dire.** Un téléphone qui passe en mode
+avion ne ferme rien : il disparaît. Sans `ping`, le serveur croit le joueur
+toujours là et continue de lui écrire dans le vide.
+
+**Le proxy doit permettre l'upgrade.** Un proxy inverse comme
+nginx ne transmet pas les en-têtes `Upgrade` et `Connection` par défaut. Sans
+configuration, la page s'affiche mais le WebSocket échoue.
+
+**La connexion est liée à un serveur précis.** Avec plusieurs instances
+derrière un répartiteur de charge, chaque connexion reste collée à l'instance
+qui l'a acceptée. Deux joueurs de la même partie peuvent donc être sur deux
+serveurs différents. Nous reparlerons de ce problème lorsque nous parlerons de
+montée en charge.
+
+**Chaque connexion coûte de la mémoire.** Le serveur garde chaque connexion
+ouverte en mémoire. Il doit donc retirer ses connexions fermées de ses
+listes, sinon elles s'accumulent.
+
+**Tout le monde est déconnecté au redémarrage.** Un déploiement ou un plantage
+ferme toutes les connexions d'un coup. Les clients doivent savoir se
+**reconnecter** et récupérer l'état qu'ils ont manqué pendant la coupure. Le
+navigateur ne le fait pas tout seul : voir [WebSocket en
+pratique](protocole_websocket_pratique#la-reconnexion).

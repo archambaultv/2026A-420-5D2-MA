@@ -1,0 +1,234 @@
+---
+sidebar_position: 16
+sidebar_label: 15. Quiz M9 en temps réel
+description: "Quiz M9, semaine 7 : le sondage de la semaine 1 disparaît, remplacé par une connexion WebSocket."
+---
+
+# Exercice 15 : Quiz M9 en temps réel
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+Depuis la semaine 1, chaque page de jeu interroge le serveur toutes les
+secondes (`setInterval` + `fetch`). Aujourd'hui, ce sondage disparaît : le
+serveur **prévient** les navigateurs quand une partie change.
+
+Les **actions** restent en HTTP (rejoindre, avancer, répondre) : elles
+fonctionnent, et les tests les couvrent. Le WebSocket sert à l'autre sens,
+du serveur vers le navigateur.
+
+Note à garder ouverte : [WebSocket en pratique](/notes_de_cours/temps_reel/protocole_websocket_pratique).
+
+## Jalon 0
+
+```bash
+git checkout main
+git pull
+git checkout -b sem-07
+npm install
+docker compose up -d postgres   # sans Docker : rien à faire
+npm run dev
+```
+
+1. Connectez-vous (`alice` / `alice`), lancez une partie depuis le
+   catalogue, et rejoignez-la dans une fenêtre privée.
+2. Dans les deux fenêtres, ouvrez les outils de développement (F12), onglet
+   **Réseau** (*Network*), filtre **Fetch/XHR**.
+
+Observez, puis répondez :
+
+- Combien de requêtes `GET /api/games/CODE` par minute, pour une classe de
+  30 joueurs ? Combien apportent du nouveau ?
+- L'animateur lance la question. Combien de temps avant qu'elle apparaisse
+  chez le joueur ?
+- Est-ce que les comptes à rebours sont synchronisés ?
+
+Lisez `client/app/useGame.js` : c'est le code qui va disparaître.
+
+## Jalon 1 : une connexion, un état
+
+- **Fichiers** : `server/src/realtime.js` (nouveau), `server/src/server.js`,
+  `client/vite.config.js`, `client/app/useGame.js`, `client/app/api.js`
+
+```bash
+npm install ws -w server        # -w : dans le workspace server
+```
+
+Les messages échangés, en JSON :
+
+| Sens | Message | Signification |
+|---|---|---|
+| navigateur → serveur | `{ type: 'join', code }` | je veux rejoindre cette partie |
+| serveur → navigateur | `{ type: 'state', game }` | l'état public complet (`publicState`) |
+| serveur → navigateur | `{ type: 'error', error }` | partie introuvable, message illisible… |
+
+### Le serveur
+
+1. Dans `realtime.js`, exportez `attachRealtime(server)`, qui crée un
+   `WebSocketServer` sur le chemin `/ws` (section [Partager le port
+   d'Express](/notes_de_cours/temps_reel/protocole_websocket_pratique#partager-le-port-dexpress)).
+2. Dans `server.js`, gardez le serveur que retourne `app.listen` et
+   passez-le à `attachRealtime`.
+3. Les groupes : une `Map` code de partie → `Set` des connexions qui
+   suivent cette partie, avec les fonctions `join(code, ws)` et `leave(code, ws)`, comme
+   dans les notes de cours. Un navigateur entre dans le groupe de sa partie, qu'il
+   affiche le salon d'attente ou la salle de jeu.
+4. À la réception d'un `join` : `repository.findGameByCode`, une erreur si la
+   partie n'existe pas ; sinon, la connexion entre dans le groupe, retient son
+   code (une variable locale de `connection`) et reçoit tout de suite
+   `{ type: 'state', game: await publicState(code) }`.
+5. Sur `close`, la connexion quitte son groupe.
+6. Pour chaque connexion, ajoutez un gestionnaire `error` et [validez chaque
+   message](/notes_de_cours/temps_reel/protocole_websocket_pratique#valider-chaque-message)
+   reçu.
+
+On envoie l'état **complet**, pas seulement ce qui a changé : un navigateur
+qui arrive en cours de partie est à jour d'un seul message.
+
+### Le client
+
+1. Vite doit relayer `/ws` comme il relaie `/api`. L'option `ws: true` laisse
+   passer la requête `Upgrade` :
+
+   ```js title="client/vite.config.js"
+   proxy: {
+     '/api': 'http://localhost:3000',
+     '/ws': { target: 'ws://localhost:3000', ws: true },
+   },
+   ```
+
+2. Réécrivez `useGame(code)` (fichier `client/app/useGame.js`). Il garde la même signature, car `lobby.jsx` et
+   `game.jsx` ne changent pas.
+   - Dans le `useEffect`, ouvrez la connexion sur la page elle-même :
+     `` `${protocol}//${location.host}/ws` `` (voir les notes de cours). Comme pour
+     `/api`, la page ne parle qu'à son propre site.
+   - Sur `open`, envoyez le `join`. Sur `message`, si c'est un `state`,
+     `setGame(message.game)`.
+   - Le nettoyage du `useEffect` ferme la connexion.
+3. Supprimez le `setInterval` et `fetchGame` (dans `api.js`). Le serveur
+   garde sa route `GET /api/games/:code`, utile à curl et aux tests.
+
+**Vérifier.** Rechargez le salon d'attente. Onglet Réseau : plus aucun
+`GET /api/games`. Filtre **WS** (*Socket* dans Firefox) : une connexion
+`/ws`, statut `101`. Cliquez dessus, onglet **Messages** : le `join` envoyé,
+le `state` reçu. Le salon s'affiche comme avant.
+
+Ouvrez `/salon/000000`, un code qui n'existe pas : un message `error` dans
+l'onglet Messages.
+
+Rejoignez maintenant la partie depuis une autre fenêtre : le salon d'attente
+ne bouge plus.
+
+## Jalon 2 : diffuser chaque changement
+
+- **Fichiers** : `server/src/realtime.js`, `server/src/app.js`
+
+1. Exportez `broadcastState(code)` : si personne ne suit la partie, on
+   s'arrête là ; sinon, un seul `publicState`, envoyé à toutes les connexions
+   ouvertes du groupe.
+2. Dans `app.js`, appelez `await broadcastState(game.code)` après chaque
+   changement d'une partie : un joueur rejoint, l'animateur avance, un joueur
+   répond (l'animateur voit le compte de réponses monter).
+
+**Vérifier.** Un joueur qui rejoint apparaît aussitôt dans le salon
+d'attente, sans recharger. L'animateur lance la question : elle s'affiche
+chez le joueur sans délai. Le joueur répond : le compte de réponses monte
+chez l'animateur. Dans l'onglet Messages, un `state` arrive à chaque action.
+
+## Jalon 3 : l'horloge de la partie
+
+Avant de lancer une question, **écrivez votre prédiction** :
+
+- que va afficher le compte à rebours ?
+- que se passe-t-il à 0 s, si personne ne répond et que l'animateur ne
+  clique pas ?
+
+Lancez la question et observez. Puis expliquez : le sondage faisait deux
+travaux cachés.
+
+- Il redessinait `Countdown` chaque seconde.
+- Chaque `GET /api/games/:code` appelait `closeQuestionIfExpired`. C'étaient
+  les **clients** qui faisaient avancer l'horloge de la partie.
+
+Corrigez les deux :
+
+1. **`client/app/components/Countdown.jsx`** : un état `now`, mis à jour par
+   un `setInterval` de 250 ms et nettoyé au démontage. Un minuteur local,
+   sans aucune requête.
+2. **`server/src/realtime.js`** : `closeAtDeadline(code, deadline)` programme
+   un `setTimeout` à l'échéance (plus 100 ms). Le rappel relit la partie
+   (`findGameByCode`), appelle `closeQuestionIfExpired`, puis
+   `broadcastState`. Entourez-le d'un `try`/`catch` : une erreur dans un
+   `setTimeout` fait tomber Node.
+3. Dans `POST /api/games/:code/next`, appelez `closeAtDeadline` quand le
+   nouvel état est `'question'`.
+
+
+**Vérifier.** Le compte à rebours descend sans à-coups, et à 0 s la question
+se clôt toute seule : le classement apparaît dans toutes les fenêtres.
+
+## Jalon 4 : la reconnexion
+
+**Observer.** Le salon d'attente ouvert, sauvegardez `server/src/app.js` :
+`node --watch` redémarre le serveur. Dans l'onglet Réseau, la connexion `/ws`
+est fermée. Rejoignez la partie depuis une autre fenêtre : le nouveau joueur
+n'apparaît pas dans le salon d'attente de la première fenêtre.
+
+**Corriger** dans `useGame.js`, en suivant [La
+reconnexion](/notes_de_cours/temps_reel/protocole_websocket_pratique#la-reconnexion) :
+
+- dans le `useEffect`, quatre variables locales : `ws` (la connexion
+  courante), `attempts` (le nombre de tentatives ratées de suite),
+  `retryTimer` (la tentative en attente) et `stopped` ;
+- une fonction `connect()`, rappelée sur `close` après 1 s, 2 s, 4 s…
+  (jusqu'à 30 s), plus un peu de hasard ;
+- `attempts` revient à 0 sur `open` ;
+- le nettoyage du `useEffect` met `stopped` à `true`, annule la tentative
+  en attente (`clearTimeout`) et ferme la connexion.
+
+Rien d'autre à faire pour le rattrapage : chaque nouvelle connexion envoie
+son `join`, et le serveur répond par l'état complet.
+
+**Vérifier.** Même expérience : une nouvelle connexion `/ws` apparaît après
+environ une seconde, et le nouveau joueur apparaît dans la première fenêtre. Revenez à
+l'accueil : aucune nouvelle connexion ne s'ouvre.
+
+```bash
+npm test
+```
+
+`fail 0` : les actions passent toujours par HTTP, les tests n'ont pas
+bougé.
+
+## Pour aller plus loin
+
+- **Un test d'intégration.** Node 24 fournit la même classe `WebSocket` que
+  le navigateur. Dans `helpers.js`, appelez `attachRealtime(server)` après
+  `app.listen(0)`, puis testez : un `join` reçoit l'état ; un joueur qui
+  rejoint en HTTP déclenche un `state`.
+- **`ping` et `pong`** : détectez les connexions mortes (voir les notes de cours).
+- **Le minuteur perdu.** Le serveur redémarre en pleine question : le
+  `setTimeout` disparaît avec lui. Que se passe-t-il à l'échéance ? Comment
+  le reprogrammer ?
+- **En conteneurs.** Avec `docker compose up --build`, la page n'est plus
+  servie par Vite mais par `client/server.js`, qui ne relaie que `/api`.
+  Le WebSocket échoue. Indice : une requête `Upgrade` n'arrive pas à
+  Express, le serveur HTTP émet l'événement `'upgrade'`.
+
+## En panne ?
+
+- `Cannot find package 'ws'` : `npm install ws -w server`, à la racine du
+  dépôt.
+- La page reste sur « Chargement… » : la connexion `/ws` est-elle dans
+  l'onglet Réseau ? Si elle échoue, vérifiez le relais dans
+  `vite.config.js`. Si elle est ouverte, le `join` part-il (onglet
+  Messages) ?
+- `InvalidStateError` : un `send` avant `open`.
+- Le serveur plante sur `Unexpected token` : un `JSON.parse` sans `try`.
+- Seule la fenêtre qui a agi se met à jour : `broadcastState` n'est pas
+  appelé dans la route, ou envoie à une seule connexion.
+- Les connexions se multiplient dans l'onglet Réseau : le nettoyage du
+  `useEffect` ne ferme pas la connexion, ou ne met pas `stopped` à `true`.
