@@ -1,20 +1,550 @@
 ---
 sidebar_position: 4
 sidebar_label: Atelier 2
-description: Énoncé de l'évaluation « Atelier 2 »
+description: Énoncé de l'évaluation « Atelier 2 » (Socket.IO)
 ---
 
-# Atelier 2
+# Atelier 2 : un clavardage dans Quiz M9
 
 - **Pondération** : 5 %
-- **Modalité** : individuel
-- **Sujet** : Socket.IO
-- **Énoncé distribué** : semaine 9
-- **Remise** : semaine 9
+- **Modalité** : individuel, en classe, pendant le bloc de l'atelier de la
+  semaine 9
+- **Documentation** : toute documentation permise, y compris
+  les notes de cours et la documentation de Socket.IO ([accusés de réception](https://socket.io/docs/v4/emitting-events/#acknowledgements)
+et les [salons](https://socket.io/docs/v4/rooms/)).
 
-:::info[Détails à venir]
+## Ce qu'on construit
 
-L'énoncé complet sera publié ici à la semaine de distribution. D'ici là, le plan
-de cours fait foi.
+Chaque partie a son propre clavardage. Il commence dans le salon d'attente
+et se poursuit dans la salle de jeu. Les joueurs y écrivent des messages.
+L'animateur les lit et peut désactiver ou réactiver le clavardage à tout
+moment.
 
-:::
+Les événements Socket.IO :
+
+| Sens | Événement | Signification |
+|---|---|---|
+| navigateur → serveur | `'join', code, ack` | Existe déjà. Le serveur répond maintenant `ack({ game, chat })`, où `chat` est l'objet `{ enabled, messages }`. |
+| navigateur → serveur | `'chat:send', { nickname, text }, ack` | Le joueur envoie un message. Le serveur répond `ack({})` s'il l'accepte, `ack({ error })` s'il le refuse. |
+| serveur → navigateur | `'chat:message', { id, nickname, text, sentAt }` | Le serveur diffuse un nouveau message à tout le salon. |
+| serveur → navigateur | `'chat:enabled', enabled` | Le serveur annonce que l'animateur a désactivé (`false`) ou réactivé (`true`) le clavardage. |
+
+L'animateur active ou désactive le clavardage par une requête HTTP :
+
+| Route | Corps | Réponse |
+|---|---|---|
+| `POST /api/games/:code/chat` | `{ enabled }` | `200 { enabled }` en cas de succès ; sinon 400, 401, 403 ou 404 |
+
+Le serveur conserve le clavardage **en mémoire**, dans `realtime.js`. La
+base de données ne change pas.
+
+## Jalon 0 : partir de la semaine 9
+
+```bash
+git checkout main
+git pull
+git checkout -b atelier-2
+npm install
+docker compose up -d postgres   # sans Docker : rien à faire
+npm run dev
+```
+
+1. Connectez-vous (`alice` / `alice`) et lancez une partie depuis le
+   catalogue : vous êtes l'animateur.
+2. Dans une fenêtre privée, rejoignez la partie : vous êtes un joueur.
+3. Dans la fenêtre du joueur, ouvrez les outils de développement (F12),
+   onglet **Réseau** (*Network*), filtre **WS** (*Socket* dans Firefox).
+4. L'animateur commence la partie.
+
+**Vérifier.** La liste contient deux connexions `/socket.io/`. La première
+appartient au salon d'attente et s'est fermée quand le joueur a changé de
+page. La seconde appartient à la salle de jeu. Chaque page ouvre **sa
+propre** connexion : le nettoyage du `useEffect` de `useGame` ferme la
+précédente.
+
+## Jalon 1 : parler dans le salon d'attente
+
+- **Fichiers** : `server/src/realtime.js`, `client/app/useGame.js`,
+  `client/app/components/Chat.jsx` (nouveau),
+  `client/app/routes/lobby.jsx`, `client/app/routes/game.jsx`,
+  `client/app/styles.css`
+
+Dans les squelettes, `// …` remplace du code existant que vous gardez tel
+quel, et `// À vous` marque le code que vous devez écrire.
+
+### Le serveur
+
+1. En haut de `realtime.js`, sous `let io = null;`, déclarez une `Map` qui
+   associe le code de chaque partie à son clavardage,
+   `{ enabled, messages }`.
+
+   ```js
+   /** Le chat de chaque partie, en mémoire : code → { enabled, messages }. */
+   const chats = new Map();
+   let nextMessageId = 1;
+
+   /** Retourne le chat de cette partie. Le crée, actif et vide, au premier appel. */
+   function chatOf(code) {
+     // À vous : si chats ne contient pas encore ce code,
+     // associez-lui { enabled: true, messages: [] } avec chats.set.
+
+     return chats.get(code);
+   }
+   ```
+
+2. Dans le gestionnaire de `'join'`, juste après `socket.join(game.code)`,
+   enregistrez le code de la partie dans `socket.data`. Socket.IO fournit
+   cet objet, vide au départ, à chaque connexion : on y stocke ce qu'on
+   veut retrouver plus tard pour cette connexion.
+
+   ```js
+   socket.join(game.code);
+   socket.data.code = game.code; // 'chat:send' lira ici la partie de CETTE connexion
+   ```
+
+3. Ajoutez le gestionnaire de `'chat:send'` dans
+   `io.on('connection', ...)`, à côté de celui de `'join'`. Il suit la même
+   structure.
+
+   ```js
+   socket.on('chat:send', async (message, ack) => {
+     if (typeof ack !== 'function') return;
+
+     try {
+       // À vous
+     } catch (err) {
+       console.error(err);
+       ack({ error: 'Erreur du serveur.' });
+     }
+   });
+   ```
+
+   `message` vient du navigateur : rien ne garantit sa forme, ni même que
+   c'est un objet. Dans le `try`, écrivez les étapes suivantes, dans cet
+   ordre :
+
+   1. **La partie.** Lisez le code de la partie dans `socket.data.code`,
+      que le gestionnaire de `'join'` a enregistré à l'étape 2. S'il est
+      absent, la connexion n'a rejoint aucune partie : répondez
+      `ack({ error: 'Suivez d’abord une partie.' })`.
+   2. **Le texte.** Si `message?.text` est une chaîne, retirez les espaces
+      à ses extrémités avec `trim()` ; sinon, utilisez la chaîne vide `''`.
+      Si le texte obtenu est vide ou dépasse 200 caractères, répondez
+      `ack({ error })` avec un message de votre choix.
+   3. **Le joueur.** Cherchez la partie avec
+      `repository.findGameByCode(code)`, puis le joueur avec
+      `repository.findPlayer(game.id, message?.nickname)`. Si **cette**
+      partie n'a aucun joueur de ce pseudonyme, répondez `ack({ error })`.
+   4. **Le message.** Construisez l'objet `{ id, nickname, text, sentAt }`.
+      Obtenez `id` avec `nextMessageId++` : React s'en servira comme `key`.
+      Donnez à `sentAt` la valeur `Date.now()`.
+   5. **Conserver, diffuser, répondre.** Ajoutez le message à la fin de
+      `chatOf(code).messages`, diffusez-le sous le nom `'chat:message'`
+      avec `io.to(code).emit(...)`, puis répondez `ack({})`.
+
+   `io.to(code)` envoie à tout le salon, **expéditeur compris**.
+   `socket.to(code)` exclurait l'expéditeur, et son propre message
+   n'apparaîtrait jamais à son écran : le client n'affiche que les messages
+   reçus par `'chat:message'`.
+
+   Aux étapes 1 à 3, écrivez chaque réponse d'erreur sous la forme
+   `return ack({ error })`, comme dans le gestionnaire de `'join'`. Appeler
+   `ack` envoie la réponse, mais n'arrête pas la fonction : sans `return`,
+   l'exécution passe à l'étape suivante et pourrait, par exemple, diffuser
+   un message invalide.
+
+   À l'inverse, chaque chemin du gestionnaire doit appeler `ack`. Le
+   navigateur attend la réponse avec `emitWithAck`, sans délai maximal :
+   si elle ne vient jamais, sa promesse ne se résout jamais et
+   `sendMessage` reste bloquée.
+
+### Le client
+
+1. Dans `client/app/useGame.js`, `useGame(code)` retourne maintenant
+   `{ game, chat, sendMessage }` au lieu de `game` seul. Le squelette
+   montre les ajouts ; le reste du fichier ne change pas.
+
+   ```js
+   import { useEffect, useRef, useState } from 'react';
+   // …
+
+   export function useGame(code) {
+     const [game, setGame] = useState(null);
+     const [chat, setChat] = useState({ enabled: true, messages: [] }); // Ajout 1
+     const socketRef = useRef(null); // Ajout 2
+
+     useEffect(() => {
+       if (!code) return;
+
+       const socket = io({ transports: ['websocket'] });
+       socketRef.current = socket; // Ajout 2
+
+       // … les gestionnaires de 'connect' et 'state', inchangés
+
+       // Ajout 3
+       socket.on('chat:message', (message) => {
+         // À vous : appelez setChat((chat) => ({ ...chat, messages: ... }))
+         // en ajoutant message à la fin de chat.messages.
+       });
+
+       return () => {
+         socket.disconnect();
+       };
+     }, [code]);
+
+     // Ajout 4
+     /** Envoie un message au chat. Retourne une promesse de la réponse, {} ou { error }. */
+     function sendMessage(nickname, text) {
+       // À vous : émettez 'chat:send' avec { nickname, text } sur socketRef.current,
+       // avec emitWithAck, et retournez sa promesse.
+     }
+
+     return { game, chat, sendMessage };
+   }
+   ```
+
+   Les ajouts, dans l'ordre :
+
+   1. **L'état `chat`.** Un deuxième `useState` tient le clavardage,
+      `{ enabled, messages }`. Il commence activé et vide.
+   2. **La référence `socketRef`.** `sendMessage` est définie hors du
+      `useEffect` : elle ne voit pas la variable locale `socket`.
+      `useRef(null)` crée une boîte, `socketRef.current`, que React
+      conserve d'un rendu à l'autre. Le `useEffect` y range la connexion,
+      `sendMessage` l'y retrouve. Contrairement à un état, modifier
+      `socketRef.current` ne provoque pas de nouveau rendu.
+   3. **Recevoir.** Complétez le gestionnaire de `'chat:message'` : il
+      ajoute `message` à la fin de `chat.messages`.
+   4. **Envoyer.** Complétez `sendMessage`. `emitWithAck` est la version
+      promesse de `emit` avec un ack : au lieu de passer une fonction de
+      rappel, on reçoit une promesse qui se résout avec la réponse du
+      serveur, `{}` ou `{ error }`. La fonction `join` de
+      `server/test/realtime.test.js` s'en sert déjà.
+
+   **Pourquoi `setChat((chat) => ...)` et non `setChat({ ...chat, ... })` ?**
+   Rappel : quand on passe une fonction à `setChat`, React l'appelle avec
+   l'état **actuel** en paramètre et en fait le nouvel état avec la valeur de
+   retour.
+
+   Sans fonction, on lirait la variable `chat` du composant. Or le
+   gestionnaire de `'chat:message'` est créé une seule fois, quand le
+   `useEffect` s'exécute. La variable `chat` qu'il voit est celle de ce
+   rendu, où la liste est vide, et elle ne change jamais pour lui. Avec
+   `setChat({ ...chat, ... })`, chaque nouveau message s'ajouterait à cette liste
+   vide et donc remplacerait uniquement le précédent.
+
+2. Dans `lobby.jsx` **et** `game.jsx`, remplacez
+   `const game = useGame(code);` par :
+
+   ```js
+   const { game, chat, sendMessage } = useGame(code);
+   ```
+
+3. Créez le composant `Chat` dans `components/Chat.jsx`. La prop
+   `nickname` contient le pseudonyme du joueur, ou `null` pour
+   l'animateur.
+
+   ```jsx
+   import { useState } from 'react';
+
+   /** Affiche le chat de la partie. Un joueur lit et écrit ; l'animateur lit seulement. */
+   export default function Chat({ chat, sendMessage, nickname }) {
+     const [text, setText] = useState('');
+     const [error, setError] = useState(null);
+
+     async function send(event) {
+       event.preventDefault();
+       const reply = await sendMessage(nickname, text);
+       // À vous : si reply.error existe, affichez-la avec setError ;
+       // sinon, videz le champ et effacez l'erreur.
+     }
+
+     return (
+       <section className="card chat">
+         <h2>Chat</h2>
+         <ul className="chat-messages">
+           {/* À vous : pour chaque message m de chat.messages, affichez un
+               <li key={m.id}> qui contient <strong>{m.nickname}</strong>
+               suivi de {m.text}. */}
+         </ul>
+
+         {nickname && (
+           <form className="chat-form" onSubmit={send}>
+             {/* À vous : ajoutez un <input> contrôlé (value={text} et onChange)
+                 et un <button>Envoyer</button>. */}
+           </form>
+         )}
+         {error && <p className="error">{error}</p>}
+       </section>
+     );
+   }
+   ```
+
+   N'ajoutez **pas** le message à la liste dans `send` : le serveur le
+   renvoie par `'chat:message'`, comme les messages des autres joueurs.
+
+4. Dans `lobby.jsx`, importez `Chat` et placez-le à la fin du `<main>` :
+
+   ```jsx
+   <Chat
+     chat={chat}
+     sendMessage={sendMessage}
+     nickname={session?.role === 'player' ? session.nickname : null}
+   />
+   ```
+
+5. Ajoutez ces règles à la fin de `styles.css` :
+
+   ```css
+   .chat { text-align: left; margin-top: 2rem; }
+   .chat-messages {
+     list-style: none;
+     padding: 0;
+     max-height: 12rem; /* la liste défile au lieu de grandir */
+     overflow-y: auto;
+   }
+   .chat-form { grid-template-columns: 1fr auto; }
+   ```
+
+**Vérifier.** Ouvrez l'animateur et deux joueurs, chacun dans son propre
+onglet (`sessionStorage` est propre à chaque onglet). Un message envoyé par
+un joueur apparaît aussitôt dans les trois onglets. Dans l'onglet
+**Réseau**, filtre **WS**, cliquez sur la connexion, puis sur l'onglet
+**Messages** : vous voyez partir le `chat:send` et arriver le
+`chat:message`. Envoyez `<b>gras</b>` : le texte s'affiche tel quel, sans
+gras.
+
+## Jalon 2 : le clavardage suit dans la partie
+
+- **Fichiers** : `server/src/realtime.js`, `client/app/useGame.js`,
+  `client/app/routes/game.jsx`
+
+1. Dans `game.jsx`, importez `Chat` et placez-le à la fin du `<main>`. La
+   variable `nickname` y est déjà calculée :
+
+   ```jsx
+   <Chat chat={chat} sendMessage={sendMessage} nickname={nickname} />
+   ```
+
+2. Lancez une nouvelle partie. Échangez quelques messages dans le salon
+   d'attente, puis faites commencer la partie par l'animateur.
+   **Observez** le clavardage de la salle de jeu. Expliquez ce que vous
+   voyez à l'aide de ce que vous avez observé au jalon 0.
+
+3. Corrigez le problème. Côté serveur, ajoutez le clavardage à la réponse
+   du `join` :
+
+   ```js
+   ack({ game: await publicState(game.code), chat: chatOf(game.code) });
+   ```
+
+   Côté client, utilisez cette réponse dans le gestionnaire de `'connect'`
+   de `useGame` :
+
+   ```js
+   socket.emit('join', code, (reply) => {
+     if (reply.game) setGame(reply.game);
+     // À vous : remplacez l'état chat au complet par reply.chat.
+     // Pas de forme fonction ici : le nouvel état ne dépend pas de l'ancien.
+   });
+   ```
+
+4. Le serveur conserve au plus les 50 derniers messages de chaque partie.
+   Dans le gestionnaire de `'chat:send'` de `server/src/realtime.js`,
+   juste après avoir ajouté le message, retirez le plus ancien avec
+   `shift()` si la liste en compte plus de 50.
+
+**Vérifier.** Les messages du salon d'attente apparaissent dans la salle
+de jeu, sans doublon. Les joueurs peuvent continuer d'écrire pendant les
+questions comme pendant les classements. Rechargez la page d'un joueur :
+les messages réapparaissent. Sauvegardez `server/src/app.js` pour que
+`node --watch` redémarre le serveur : la connexion se rétablit toute seule
+et les joueurs peuvent encore écrire.
+
+## Jalon 3 : l'animateur désactive le clavardage
+
+- **Fichiers** : `server/src/realtime.js`, `server/src/app.js`,
+  `client/app/api.js`, `client/app/useGame.js`,
+  `client/app/components/Chat.jsx`, `client/app/routes/lobby.jsx`,
+  `client/app/routes/game.jsx`
+
+### Le serveur
+
+1. Dans `realtime.js`, ajoutez la fonction suivante :
+
+   ```js
+   /** Désactive ou réactive le chat de la partie, puis prévient tout le salon. */
+   export function setChatEnabled(code, enabled) {
+     // À vous : affectez enabled à chatOf(code).enabled,
+     // puis émettez 'chat:enabled' avec enabled à tout le salon.
+   }
+   ```
+
+2. Dans `app.js`, faites trois ajouts : `setChatEnabled` à l'import de
+   `./realtime.js`, la ligne de la nouvelle route au contrat en haut du
+   fichier, puis la route elle-même, à côté de
+   `POST /api/games/:code/next`. Le middleware `requireGameHost` vérifie
+   déjà que la partie existe et que l'utilisateur en est l'animateur ; il
+   place ensuite la partie dans `req.game`.
+
+   ```js
+   app.post('/api/games/:code/chat', requireAccount, requireGameHost, (req, res) => {
+     const enabled = req.body?.enabled;
+     // À vous : si enabled n'est pas un booléen, répondez 400 { error }.
+     // Sinon, appelez setChatEnabled(req.game.code, enabled), puis répondez 200 { enabled }.
+   });
+   ```
+
+3. Dans `'chat:send'`, après la vérification du joueur, refusez tout
+   message quand `chatOf(code).enabled` est faux, en répondant
+   `ack({ error: 'Le chat est désactivé.' })`. Griser le champ dans le
+   navigateur ne protège rien : c'est le serveur qui doit refuser.
+
+### Le client
+
+1. Dans `api.js`, écrivez `setChatEnabled(code, enabled)` sur le modèle de
+   `sendAnswer`. Elle envoie `POST /api/games/${code}/chat` avec le corps
+   `{ enabled }`.
+
+2. Dans `useGame`, ajoutez un gestionnaire de `'chat:enabled'` :
+
+   ```js
+   socket.on('chat:enabled', (enabled) => {
+     // À vous : affectez la nouvelle valeur à chat.enabled,
+     // encore avec la forme fonction de setChat.
+   });
+   ```
+
+3. Le composant `Chat` reçoit deux nouvelles props, `code` et `isHost`.
+
+   ```jsx
+   import { setChatEnabled } from '../api.js';
+
+   export default function Chat({ code, chat, sendMessage, nickname, isHost }) {
+     // … text, error et send, inchangés
+
+     async function toggle() {
+       try {
+         // À vous : appelez setChatEnabled avec code et l'inverse de chat.enabled.
+         // Ne modifiez pas l'état ici : 'chat:enabled' mettra l'affichage à jour.
+       } catch (e) {
+         setError(e.message);
+       }
+     }
+
+     return (
+       <section className="card chat">
+         {/* … le titre et la liste, inchangés */}
+
+         {/* À vous : si le chat est désactivé, affichez
+             <p className="notice">Chat désactivé par l'animateur.</p> */}
+         {isHost && (
+           <button className="secondary" onClick={toggle}>
+             {/* À vous : affichez « Désactiver le chat » si le chat est actif,
+                 « Réactiver le chat » sinon. */}
+           </button>
+         )}
+
+         {/* … le formulaire. Ajoutez disabled={!chat.enabled}
+             au champ ET au bouton Envoyer. */}
+       </section>
+     );
+   }
+   ```
+
+4. Passez les deux nouvelles props à `<Chat>`. Dans `game.jsx`, passez
+   `code={code}` et `isHost={isHost}`. Dans `lobby.jsx`, passez
+   `code={code}` et `isHost={session?.role === 'host'}`.
+
+**Vérifier.** Pendant une question, l'animateur désactive le clavardage :
+la mention apparaît aussitôt chez tous et le champ du joueur devient grisé.
+L'animateur le réactive : les joueurs peuvent écrire de nouveau. Rechargez
+la page d'un joueur pendant que le clavardage est désactivé : il reste
+désactivé. Refaites ces vérifications dans le salon d'attente.
+
+## Jalon 4 : les tests
+
+- **Fichier** : `server/test/realtime.test.js`
+
+À la fin du fichier, ajoutez les deux tests suivants, sur le modèle des
+tests existants (`newGame`, `join`, `nextState`) :
+
+```js
+/** Attend le prochain événement de ce nom sur cette connexion. */
+function next(socket, event) {
+  return new Promise((resolve) => socket.once(event, resolve));
+}
+
+test('un message du chat arrive à tout le salon', async () => {
+  const code = await newGame();
+  await api.request('POST', `/api/games/${code}/players`, { nickname: 'zoé' });
+  const zoe = await join(code);
+  const host = await join(code);
+
+  // On écoute AVANT d'envoyer : sinon, le message pourrait arriver avant qu'on écoute.
+  const received = next(host.socket, 'chat:message');
+  // À vous :
+  // 1. zoé envoie un message avec zoe.socket.emitWithAck('chat:send', ...) ;
+  //    vérifiez que la réponse est {} ;
+  // 2. attendez received et vérifiez le pseudonyme et le texte du message reçu.
+
+  zoe.socket.disconnect();
+  host.socket.disconnect();
+});
+
+test('chat désactivé : le serveur refuse', async () => {
+  const code = await newGame();
+  await api.request('POST', `/api/games/${code}/players`, { nickname: 'zoé' });
+  const { socket } = await join(code);
+
+  // À vous :
+  // 1. alice désactive le chat avec api.request('POST', ..., { enabled: false }, alice) ;
+  // 2. zoé envoie un 'chat:send' ; vérifiez que la réponse contient error.
+
+  socket.disconnect();
+});
+```
+
+```bash
+npm test
+```
+
+**Vérifier.** Le résultat affiche `fail 0`, vos deux tests compris.
+
+## Montrer que ça marche
+
+Levez la main quand le jalon 4 est terminé ; je passe à votre poste. **Ne
+partez pas avant que j'aie vu votre travail.** Ce que je regarde :
+
+1. Avec l'animateur et deux joueurs, les messages passent dans le salon
+   d'attente.
+2. L'animateur commence la partie : les messages du salon se retrouvent
+   dans la salle de jeu, et les joueurs peuvent continuer d'écrire.
+3. En pleine question, l'animateur désactive puis réactive le clavardage.
+4. `npm test` affiche `fail 0`.
+5. Vos fichiers `realtime.js`, `useGame.js` et `Chat.jsx` sont ouverts
+   dans VS Code.
+
+## En panne ?
+
+- Le `chat:send` part (onglet Messages), mais aucun `chat:message`
+  n'arrive : le serveur émet sur `socket` au lieu de `io.to(code)`, ou le
+  gestionnaire de `'join'` n'enregistre pas `socket.data.code`.
+- La promesse de `sendMessage` ne se résout jamais : une branche de
+  `'chat:send'` n'appelle pas `ack`.
+- Les messages apparaissent en double : `Chat` ajoute lui-même le message
+  à la liste, en plus de `'chat:message'`, ou `useGame` ajoute le `chat` du
+  `join` à l'état au lieu de le remplacer.
+- Seul le dernier message reste affiché : `setChat({ ...chat, ... })` lit
+  un `chat` périmé. Utilisez la forme fonction, `setChat((chat) => ...)`.
+- `Cannot read properties of null (reading 'emitWithAck')` : `useGame`
+  n'a pas enregistré la connexion dans `socketRef.current`.
+- La salle de jeu affiche « Chargement… » pour toujours, ou plante sur
+  `game.state` : `game.jsx` contient encore `const game = useGame(code)`.
+- Un clic sur le bouton de l'animateur affiche « Connectez-vous. » ou
+  « Seul l’animateur fait avancer la partie. » : cet onglet n'est pas
+  connecté avec le compte qui a lancé la partie.
+- React affiche l'avertissement `unique "key" prop` : donnez à chaque
+  `<li>` la `key` `m.id`.
+- `npm test` ne se termine pas : une connexion reste ouverte. Appelez
+  `socket.disconnect()` à la fin de chaque test.
