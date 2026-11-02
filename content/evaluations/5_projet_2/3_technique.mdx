@@ -1,0 +1,54 @@
+---
+sidebar_position: 3
+sidebar_label: Les exigences techniques
+description: "Projet 2 : Socket.IO, l'identité d'une connexion, la présence et les tests du temps réel"
+---
+
+# Les exigences techniques
+
+Les [exigences du projet 1](/evaluations/projet_1/technique) s'appliquent
+toujours, avec les changements suivants.
+
+## Le temps réel
+
+- **Socket.IO** remplace l'interrogation périodique. Une partie est un
+  salon ; le serveur diffuse à ce salon chaque changement de la partie.
+- Les actions (jouer un coup, abandonner) passent par HTTP ou par Socket.IO,
+  à votre choix. Vous devez pouvoir justifier ce choix.
+- Une connexion qui se rétablit (page rechargée, réseau revenu) retrouve
+  l'état complet de la partie.
+
+## L'identité d'une connexion
+
+- La connexion Socket.IO est **authentifiée à son ouverture**, par le
+  cookie de session. Le serveur ne se fie jamais à une identité envoyée dans
+  le contenu d'un message.
+- Le serveur refuse un coup ou un abandon venant d'un spectateur, ou d'un
+  joueur qui n'est pas dans cette partie, quel que soit le chemin (HTTP ou
+  Socket.IO).
+
+## La présence
+
+- La présence se déduit des connexions ouvertes.
+- Ouvrir la même partie dans un deuxième onglet est permis ou refusé, à
+  votre choix. Si c'est permis, le joueur reste une seule personne : fermer
+  un onglet ne le met pas hors ligne.
+- Le délai de 60 secondes est décidé par le **serveur**. Le navigateur
+  affiche le temps restant ; il ne décide pas de la fin de la partie.
+
+## Les tests
+
+En plus des tests du projet 1, des tests d'intégration du temps réel avec
+`socket.io-client` vérifient au minimum que :
+
+- le coup d'un joueur arrive à son adversaire ;
+- un spectateur ne peut pas jouer ;
+- un joueur qui se déconnecte est annoncé hors ligne à son adversaire.
+
+:::warning
+
+L'énoncé est volontairement incomplet sur le plan technique. Vous êtes
+responsables de l'architecture, du choix des bibliothèques et de la qualité du
+code.
+
+:::

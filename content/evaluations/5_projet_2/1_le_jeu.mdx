@@ -1,0 +1,41 @@
+---
+sidebar_position: 1
+sidebar_label: Le jeu en direct
+description: "Projet 2 : le temps réel, la présence de l'adversaire, l'abandon par déconnexion et les spectateurs"
+---
+
+# Le jeu en direct
+
+Les règles du projet 1 ne changent pas : partie privée avec un code, mat,
+nulle, abandon, classement Elo.
+
+## Le temps réel
+
+Quand un joueur joue un coup, son adversaire le voit **aussitôt**, sans
+recharger la page. Le navigateur n'interroge plus le serveur à intervalles
+réguliers : c'est le serveur qui prévient.
+
+## La présence de l'adversaire
+
+Chaque joueur voit si son adversaire est **en ligne**, c'est-à-dire s'il a la
+partie ouverte en ce moment.
+
+Un joueur qui se déconnecte en pleine partie (onglet fermé, réseau coupé) a
+**60 secondes** pour revenir :
+
+- son adversaire voit le temps restant ;
+- s'il revient à temps, la partie continue là où elle en était ;
+- sinon, il **perd par abandon**, et les deux classements sont mis à jour
+  comme pour un abandon ordinaire.
+
+Recharger la page est une déconnexion suivie d'un retour : la partie
+continue. Si les deux joueurs sont déconnectés, le premier dont le délai
+expire perd la partie.
+
+## Les spectateurs
+
+N'importe qui peut **regarder** une partie en cours avec le lien de la
+partie, même sans compte. Le spectateur voit l'échiquier se mettre à jour en direct, mais ne
+peut ni jouer ni abandonner.
+
+Les deux joueurs voient combien de spectateurs regardent leur partie.

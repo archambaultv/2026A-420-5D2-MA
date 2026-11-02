@@ -1,0 +1,115 @@
+---
+sidebar_position: 6
+sidebar_label: Entretien individuel et critères
+description: "Projet 2 : les cinq critères évalués, leur pondération, et la note individuelle"
+---
+
+# L'entretien individuel et les critères
+
+## L'entretien
+
+L'entretien est **individuel** et dure **20 minutes**, pendant la semaine 14.
+Chaque personne réserve sa plage avec le lien que je vous enverrai. L'entretien
+consiste en une démonstration et une série de questions pour valider les
+critères ci-dessous.
+
+Le barème est celui de la page [Évaluation et notation](/evaluations/notation).
+
+## 1. Le jeu fonctionne : démonstration des récits (25 %)
+
+**Acquis.** Les [douze récits](/evaluations/projet_2/recits) fonctionnent de
+bout en bout, dans deux navigateurs à la fois, y compris les cas d'erreur. De
+plus, une partie en cours survit à un redémarrage du serveur.
+
+**Avancé.** En plus de « Acquis », au moins deux de ces ajouts fonctionnent
+de bout en bout :
+
+- **La pendule.** Chaque joueur dispose d'un temps total (5 minutes, par
+  exemple) ; celui qui l'épuise perd. Le serveur fait autorité sur le temps,
+  le navigateur ne fait que l'afficher.
+- **La concurrence.** Deux requêtes simultanées ne cassent pas la partie : un
+  coup joué sur une position périmée est refusé, un abandon et un mat qui
+  arrivent en même temps donnent un seul résultat. Des tests le démontrent.
+- **Le délai qui survit.** Le délai de 60 secondes reprend correctement après
+  un redémarrage du serveur.
+
+## 2. Le jeu fonctionne : votre partie du code (25 %)
+
+**Acquis.** Vous connaissez le code dont vous étiez responsable et vous
+l'expliquez clairement.
+
+- Vous retrouvez votre code sans aide et sans chercher longtemps.
+- Vous suivez le parcours d'une action, du clic d'un joueur jusqu'à l'écran
+  de son adversaire, en nommant les fichiers, les fonctions et les événements
+  traversés.
+- Vous expliquez ce que fait le code et pourquoi, sans le lire ligne par
+  ligne.
+- Vous justifiez vos choix et répondez aux questions de suivi.
+
+**Avancé.** En plus de « Acquis » :
+
+- Vous nommez les limites de votre code et proposez des améliorations.
+- Vous connaissez votre code sans même avoir à le relire.
+
+## 3. Le jeu fonctionne : l'application dans son ensemble (20 %)
+
+**Acquis.** Vous comprenez aussi le code que vous n'avez pas écrit, et vous
+justifiez l'architecture de l'application.
+
+- Pour les récits que vous n'avez pas codés, vous retrouvez le code et
+  expliquez son fonctionnement. Par exemple :
+  - Vous expliquez comment le serveur sait qui est au bout d'une connexion
+    Socket.IO, et comment il refuse un coup venant d'un spectateur ou d'un
+    joueur qui n'est pas dans la partie, par HTTP comme par Socket.IO.
+  - Vous expliquez où vit chaque morceau d'état (la base, la mémoire du
+    serveur, le navigateur) et ce qui se passe si le serveur redémarre pendant
+    le délai de 60 secondes.
+- Vous justifiez l'architecture (actions par HTTP ou par Socket.IO, salons,
+  ce que le serveur diffuse) et vos choix de bibliothèques.
+
+**Avancé.** En plus de « Acquis » :
+
+- Vous comprenez très bien l'application dans son ensemble, pas seulement
+  la partie que vous avez codée.
+- Vous répondez clairement et précisément à des questions sur des
+  extensions possibles, par exemple une revanche proposée en direct ou deux
+  instances du serveur.
+
+## 4. Tests et intégration continue (15 %)
+
+**Acquis.** Le dépôt refuse une régression, y compris dans le temps réel, et
+la chaîne d'intégration continue est en place.
+
+- Les tests d'intégration de l'API tiennent toujours et deviennent rouges si
+  on casse le comportement d'un récit.
+- Des tests du temps réel avec `socket.io-client` vérifient au minimum que
+  le coup d'un joueur arrive à son adversaire, qu'un spectateur ne peut pas
+  jouer et qu'un joueur qui se déconnecte est annoncé hors ligne.
+- `.github/workflows/ci.yml` exécute les tests à chaque `push` sur `main`
+  et, s'ils passent, publie les images sur ghcr.io avec les tags `latest` et
+  `sha-`.
+- La chaîne est verte au commit marqué `v2`.
+- À l'entretien, vous expliquez les tests et ce qu'ils vérifient, ainsi que
+  ce qui n'est pas testé et pourquoi.
+
+**Avancé.** En plus de « Acquis » :
+
+- Votre gestion de Git et des demandes de tirage est exemplaire.
+
+## 5. Livraison (15 %)
+
+**Acquis.** L'application se déploie sans le code source, à l'aide de
+`docker compose`, sur une machine où il n'y a que Docker.
+
+- Après un `docker compose down` puis `up`, les parties sont toujours là.
+- Le `README.md` explique comment démarrer l'application, en développement
+  et sur la machine de déploiement.
+- Le tag `v2` est présent sur le commit remis.
+- À l'entretien, vous expliquez `deploy/compose.yml`, où vivent les données
+  de la base et ce qu'il en reste après un `docker compose down`, et la
+  gestion des secrets.
+
+**Avancé.** En plus de « Acquis » :
+
+- **L'application est déployée** à une adresse publique, en HTTPS, derrière
+  un mandataire inverse qui laisse passer le WebSocket (semaine 12).
