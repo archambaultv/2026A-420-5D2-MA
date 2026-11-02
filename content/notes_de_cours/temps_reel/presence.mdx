@@ -1,0 +1,239 @@
+---
+sidebar_position: 3
+sidebar_label: Identité et présence
+description: "Socket.IO : authentifier une connexion à son ouverture, savoir qui est en ligne, réagir à une déconnexion."
+---
+
+# Identité et présence
+
+Un serveur Socket.IO gère des connexions. Deux questions reviennent dans
+toute application en temps réel :
+
+- **Qui** est au bout de cette connexion ?
+- **Est-il encore là ?**
+
+Cette page reprend [Savoir qui est
+connecté](/notes_de_cours/temps_reel/protocole_websocket_pratique#savoir-qui-est-connecté)
+et [`ping` et
+`pong`](/notes_de_cours/temps_reel/protocole_websocket_pratique#détecter-une-connexion-morte--ping-et-pong),
+avec Socket.IO.
+
+## Qui est au bout de la connexion ?
+
+### Le problème : croire le message
+
+Dans la solution de l'atelier 2, le joueur dit qui il est dans chaque
+message :
+
+```js
+socket.emit('chat:send', { nickname: 'zoé', text: 'Bonjour' }, ack);
+```
+
+Le serveur vérifie que `zoé` existe dans la partie, mais pas que c'est zoé
+qui écrit. N'importe quel script peut ouvrir une connexion et envoyer ce
+message. Le serveur doit vérifier l'identité du client.
+
+### La solution : vérifier une fois, à l'ouverture
+
+En HTTP, chaque requête porte sa preuve (cookie ou en-tête
+`Authorization`). Une connexion Socket.IO, elle, reste ouverte : on vérifie
+l'identité **une seule fois**, à l'ouverture, et on retient le résultat sur
+la connexion. La séquence, dans l'ordre :
+
+1. **Le joueur rejoint la partie** (`POST /api/games/:code/players`). Le
+   serveur lui remet un **jeton** signé, que l'onglet garde.
+2. **Le navigateur ouvre la connexion** : la poignée de main WebSocket, une
+   requête HTTP `Upgrade`. Elle porte les **cookies**, donc la session de
+   l'animateur s'il est connecté.
+3. **Le navigateur envoie le premier message Socket.IO**, `CONNECT`, avec
+   l'objet **`auth`** qui contient le jeton. Le serveur vérifie le jeton et
+   le cookie, puis accepte ou refuse la connexion.
+4. **Les événements** (`join`, `chat:send`…) relisent ce qui a été vérifié,
+   sans rien redemander au client.
+
+### 1. Le jeton, reçu en rejoignant
+
+Un joueur de Quiz M9 n'a pas de compte. Le serveur lui remet un jeton quand
+il rejoint la partie : c'est la même idée que le cookie de session, des
+données **signées** avec `SESSION_SECRET`.
+
+```js
+// POST /api/games/:code/players
+res.status(201).json({ nickname, token: signPlayerToken(game.code, nickname) });
+```
+
+Le jeton contient `{ code, nickname }`. Son contenu est lisible, mais
+modifier le pseudonyme invalide la signature. Le navigateur le range dans
+`sessionStorage`, un par onglet. Le même jeton sert aussi en HTTP, dans
+l'en-tête `Authorization: Bearer <jeton>`.
+
+### 2. Le cookie, dans la poignée de main WebSocket
+
+La poignée de main WebSocket est une requête HTTP vers notre site : le
+navigateur y joint ses cookies, comme d'habitude. Côté serveur,
+`socket.request` est cette requête, et on la lit avec la même fonction que
+les routes Express :
+
+```js
+readSession(socket.request).accountId; // l'animateur, ou undefined
+```
+
+Le cookie ne suffit pas pour un joueur :
+
+- un joueur n'a pas de compte, donc pas de cookie de session ;
+- un cookie est partagé par tous les onglets du navigateur, alors que chaque
+  onglet peut être un joueur différent.
+
+| Preuve | Où elle vit | Pour qui |
+|---|---|---|
+| Cookie de session | le navigateur, partagé par tous les onglets | l'animateur, qui a un compte |
+| Jeton du joueur | `sessionStorage`, un par onglet | le joueur, qui n'a pas de compte |
+
+### 3. Le jeton, dans `auth`
+
+Côté navigateur, l'option `auth` joint le jeton au premier message
+Socket.IO :
+
+```js
+const socket = io({ transports: ['websocket'], auth: { token } });
+```
+
+`auth` est le nom de l'option de Socket.IO ; le serveur la reçoit dans
+`socket.handshake.auth`. Les clés de l'objet (`token` ici) sont libres, tant
+que le client et le serveur utilisent les mêmes.
+
+Ce message voyage dans une trame WebSocket, **après** la réponse `101` de la
+poignée de main. Dans l'onglet Messages des outils de développement :
+
+| Sens | Message | Signification |
+|---|---|---|
+| reçu | `0{"sid":"…","pingInterval":25000,…}` | Engine.IO : la connexion est ouverte |
+| envoyé | `40{"token":"…"}` | Socket.IO `CONNECT`, avec `auth` |
+| reçu | `40{"sid":"…"}` | connexion acceptée |
+| reçu | `44{"message":"Jeton invalide."}` | ou connexion refusée |
+
+Le jeton n'est pas dans l'URL : il ne finit pas dans les journaux des
+serveurs.
+
+Côté serveur, un **intergiciel** `io.use` s'exécute à la réception de ce
+message, avant l'événement `connection`, comme un intergiciel Express avant
+une route. Il vérifie les deux preuves :
+
+```js
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token;
+  if (token !== undefined) {
+    const player = verifyPlayerToken(token);
+    if (!player) return next(new Error('Jeton invalide.')); // connexion refusée
+    socket.data.player = player; // { code, nickname }
+  }
+  socket.data.accountId = readSession(socket.request).accountId ?? null;
+  next(); // connexion acceptée
+});
+```
+
+`next(new Error(...))` refuse la connexion. Le navigateur reçoit l'événement
+`connect_error`, et Socket.IO **ne réessaie pas** : réessayer avec le même
+jeton donnerait la même réponse. `socket.active` vaut alors `false`.
+
+```js
+socket.on('connect_error', (err) => {
+  if (!socket.active) setError(err.message); // refusé par le serveur
+  // sinon : une panne réseau, Socket.IO réessaie tout seul
+});
+```
+
+### 4. Les événements relisent `socket.data`
+
+`socket.data` est l'objet où l'on range ce qu'on sait de la connexion. Les
+événements le relisent :
+
+```js
+socket.on('chat:send', (message, ack) => {
+  const player = socket.data.player; // vérifié à l'ouverture
+  if (!player) return ack({ error: 'Seul un joueur écrit dans le chat.' });
+  // message.nickname est ignoré.
+});
+```
+
+## Qui est là ? La présence
+
+### La présence se déduit des connexions
+
+Un joueur inscrit dans la base n'est pas forcément devant son écran. Être
+**en ligne**, c'est avoir au moins une connexion ouverte dans le salon de la
+partie. Cette information n'est pas stockée ; elle est calculée à partir des
+connexions.
+
+```js
+const sockets = await io.in(code).fetchSockets(); // les connexions du salon
+const online = new Set(
+  sockets.filter((s) => s.data.player).map((s) => s.data.player.nickname),
+);
+```
+
+Un joueur qui a ouvert deux onglets a **deux connexions**, mais il n'est
+qu'une personne : le `Set` ne le compte qu'une fois. S'il ferme un onglet, il
+reste en ligne.
+
+`fetchSockets()` est asynchrone.
+
+### Prévenir le salon
+
+On diffuse la présence avec le reste de l'état, aux deux moments où elle
+change.
+
+**Une connexion arrive** (dans `join`) : les autres reçoivent le nouvel état.
+
+```js
+socket.join(code);
+const state = await stateWithPresence(code);
+socket.to(code).emit('state', state); // tout le salon SAUF cette connexion
+ack({ game: state });                 // elle, elle le reçoit dans l'ack
+```
+
+**Une connexion part** : l'événement `disconnect`. À ce moment, Socket.IO
+l'a déjà retirée de ses salons, donc l'état calculé ne la compte plus.
+
+```js
+socket.on('disconnect', async () => {
+  if (socket.data.code) await broadcastState(socket.data.code);
+});
+```
+
+### Combien de temps pour apprendre un départ ?
+
+| Ce qui arrive au joueur | Le serveur l'apprend |
+|---|---|
+| Il ferme l'onglet, quitte la page | tout de suite : le navigateur ferme la connexion |
+| Le Wi-Fi tombe, le téléphone se met en veille | au battement de cœur suivant, jusqu'à environ 45 s |
+
+Socket.IO fait le `ping`/`pong` de la semaine 7 à notre place : le serveur
+envoie un `ping` toutes les 25 s (`pingInterval`) et attend la réponse 20 s
+(`pingTimeout`). Raccourcir ces délais détecte les départs plus vite, au
+prix de plus de trafic :
+
+```js
+io = new Server(server, { pingInterval: 10_000, pingTimeout: 5_000 });
+```
+
+### Le délai de grâce
+
+Recharger la page, c'est une déconnexion suivie d'une reconnexion, moins
+d'une seconde plus tard. Le joueur clignote : hors ligne, puis en ligne. Pour
+l'éviter, on attend quelques secondes avant d'annoncer un départ. S'il est
+revenu entre-temps, l'état diffusé le montre en ligne :
+
+```js
+socket.on('disconnect', () => {
+  setTimeout(() => broadcastState(code), 5000); // la présence est recalculée dans 5 s
+});
+```
+
+Ce n'est qu'une approximation : une autre diffusion pendant ces 5 s le
+montrerait hors ligne. Pour bien faire, le serveur garde en mémoire les
+départs récents et les compte encore comme en ligne.
+
+Le même principe donne une règle de jeu : « un joueur déconnecté a 60 s pour
+revenir, sinon il perd ». C'est alors le **serveur** qui décide de
+l'échéance, jamais le navigateur.

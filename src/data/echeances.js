@@ -22,6 +22,10 @@ const echeances = {
     1: 'le mercredi 7 octobre 2026, à 23 h 59',
     2: 'le mardi 6 octobre 2026, à 23 h 59',
   },
+  projet_2: {
+    1: 'le dimanche 29 novembre 2026, à 23 h 59',
+    2: 'le dimanche 29 novembre 2026, à 23 h 59',
+  },
 };
 
 export default echeances;

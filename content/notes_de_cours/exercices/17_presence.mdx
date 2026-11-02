@@ -1,0 +1,198 @@
+---
+sidebar_position: 17
+sidebar_label: 16. Qui est là ?
+description: "Quiz M9, semaine 10 : le joueur prouve qui il est avec un jeton, et le salon voit qui est en ligne."
+---
+
+# Exercice 16 : qui est là ?
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+Deux défauts de Quiz M9 :
+
+- n'importe qui peut écrire dans le chat sous le pseudonyme d'un autre ;
+- un joueur qui a fermé son onglet apparaît encore dans le salon, et le
+  compte de réponses l'attend toujours.
+
+Note à garder ouverte : [Identité et présence](/notes_de_cours/temps_reel/presence).
+
+## Jalon 0
+
+Le point de départ est la solution de l'atelier 2.
+
+```bash
+git checkout main
+git pull
+git checkout -b sem-10
+npm install
+docker compose up -d postgres   # sans Docker : DATABASE_URL=sqlite:data/quizm9.db dans server/.env
+npm run dev
+```
+
+Lancez une partie (`alice` / `alice`), rejoignez-la sous le pseudonyme `zoé`
+dans une fenêtre privée, puis, dans un autre terminal :
+
+```bash
+node attacks/chat-impostor.js CODE zoé
+```
+
+Un message de « zoé », envoyé par le script, apparaît dans le chat.
+
+## Jalon 1 : le jeton du joueur
+
+- **Fichiers** : `server/src/session.js`, `server/src/app.js`,
+  `server/src/realtime.js`, `client/app/routes/home.jsx`,
+  `client/app/useGame.js`, `client/app/components/Chat.jsx`
+
+### Le serveur
+
+1. Dans `session.js`, ajoutez le jeton du joueur. Il réutilise la signature
+   du cookie de session :
+
+   ```js title="server/src/session.js"
+   export function signPlayerToken(code, nickname) {
+     return signSession({ code, nickname });
+   }
+
+   /** { code, nickname }, ou null si le jeton n'est pas valide. */
+   export function verifyPlayerToken(token) {
+     if (typeof token !== 'string') return null;
+     const { code, nickname } = verifySession(token);
+     return code && nickname ? { code, nickname } : null;
+   }
+   ```
+
+2. `POST /api/games/:code/players` répond maintenant
+   `{ nickname, token: signPlayerToken(game.code, nickname) }`.
+3. Dans `attachRealtime`, avant `io.on('connection', …)`, ajoutez
+   l'intergiciel `io.use` de la note : un jeton présent mais invalide
+   refuse la connexion, un jeton valide est rangé dans
+   `socket.data.player`. Pas de jeton : la connexion est acceptée (un
+   spectateur, ou l'animateur).
+4. Dans `join` : si la connexion a un jeton et que `player.code` n'est pas
+   le code demandé, répondez `ack({ error: 'Ce jeton est celui d’une autre partie.' })`.
+5. Dans `chat:send` : le pseudonyme vient de `socket.data.player`, plus du
+   message. Sans joueur, refusez. Le message devient `{ text }`, et la
+   recherche du joueur dans la base n'est plus utile : le jeton signé
+   suffit.
+
+### Le client
+
+1. Dans `home.jsx`, gardez le jeton reçu dans la session de l'onglet :
+   `saveSession(code, { role: 'player', nickname, token })`.
+2. Dans `useGame.js`, présentez-le à l'ouverture de la connexion :
+
+   ```js title="client/app/useGame.js"
+   const token = getSession(code)?.token;
+   const socket = io({ transports: ['websocket'], auth: token ? { token } : {} });
+   ```
+
+3. `sendMessage(text)` n'envoie plus que `{ text }`. Adaptez l'appel dans
+   `Chat.jsx`.
+
+**Vérifier.** Rejoignez une **nouvelle** partie (l'ancienne session n'a pas
+de jeton). Le chat fonctionne comme avant. Relancez l'imposteur : il est
+refusé. Dans l'onglet Réseau, filtre **WS**, cliquez sur la connexion
+`/socket.io` : le premier message envoyé, `40{"token":"…"}`, contient le
+jeton.
+
+## Jalon 2 : qui est en ligne
+
+- **Fichiers** : `server/src/realtime.js`
+
+1. Dans `join`, après `socket.join`, retenez le **rôle** de la connexion
+   dans `socket.data.role` :
+   - `'player'` si elle a un jeton ;
+   - `'host'` si le cookie de session (lu dans `io.use` avec
+     `readSession(socket.request)`) est celui de l'animateur de la partie,
+     `game.account_id` ;
+   - `'spectator'` sinon.
+2. Écrivez `stateWithPresence(code)` : l'état de `publicState`, plus la
+   présence calculée avec `io.in(code).fetchSockets()` (voir la note).
+   - chaque joueur reçoit `online: true` ou `false` ;
+   - `hostOnline` : l'animateur a-t-il une connexion ouverte ?
+   - `spectatorCount` : le nombre de connexions `'spectator'`.
+3. `broadcastState` et l'ack de `join` envoient `stateWithPresence`.
+4. Les autres doivent apprendre qu'une connexion arrive : dans `join`,
+   `socket.to(game.code).emit('state', state)` avant l'ack.
+5. Et qu'elle part : sur `disconnect`, `broadcastState(socket.data.code)`,
+   dans un `try`/`catch`.
+
+**Vérifier.** Onglet Messages de la connexion `/socket.io`, côté
+animateur : chaque `state` porte `online`, `hostOnline` et
+`spectatorCount`. Fermez l'onglet du joueur : un `state` arrive, avec
+`online: false`.
+
+## Jalon 3 : l'afficher
+
+- **Fichiers** : `client/app/components/Leaderboard.jsx`,
+  `client/app/routes/lobby.jsx`, `client/app/routes/game.jsx`,
+  `client/app/styles.css`
+
+1. Dans `Leaderboard`, un point devant chaque pseudonyme : vert en ligne,
+   gris hors ligne.
+2. Dans l'en-tête du salon et de la salle de jeu : « 3 spectateur(s) ».
+3. Si `hostOnline` est faux : « L'animateur s'est déconnecté. »
+4. Dans la salle de jeu, pour **tout le monde** et plus seulement pour
+   l'animateur : « 12 sur 18 ont répondu », où 18 est le nombre de joueurs
+   **en ligne**.
+
+**Vérifier.** Trois fenêtres : l'animateur, un joueur, un spectateur (une
+fenêtre privée qui ouvre `/salon/CODE` sans rejoindre). Fermez le joueur, puis
+rouvrez-le : son point passe au gris, puis au vert. Ouvrez le même joueur
+dans **deux** onglets, fermez-en un : il reste en ligne.
+
+```bash
+npm test
+```
+
+Des tests échouent : ceux du chat envoient un pseudonyme sans jeton, et
+l'état des joueurs porte maintenant `online`. C'est attendu, voir
+ci-dessous.
+
+## Pour aller plus loin
+
+- **Les tests.** Dans `server/test/realtime.test.js`, `join` accepte un
+  jeton et un cookie :
+
+  ```js
+  async function join(code, { token, cookie } = {}) {
+    const socket = io(api.base, {
+      transports: ['websocket'],
+      auth: token ? { token } : {},
+      extraHeaders: cookie ? { cookie } : {},
+    });
+    const reply = await socket.emitWithAck('join', code);
+    return { socket, reply };
+  }
+  ```
+
+  Adaptez les tests du chat, puis ajoutez : un jeton falsifié reçoit
+  `connect_error` ; un joueur qui se déconnecte passe à `online: false` ; deux
+  onglets du même joueur, en fermer un ne le met pas hors ligne.
+- **Le jeton pour répondre.** `POST /api/games/:code/answers` croit encore
+  le `nickname` du corps de la requête. Exigez plutôt
+  `Authorization: Bearer <jeton>`.
+- **Le délai de grâce.** Rechargez la page du joueur : il clignote. Annoncez
+  un départ seulement s'il dure plus de 5 s (voir la note).
+- **« zoé écrit… »** dans le chat, avec un événement `chat:typing` et
+  `socket.volatile.emit` : un indicateur qu'on peut perdre sans dommage.
+
+La solution (branche `sol-10`) fait les trois jalons, les tests et le jeton
+pour répondre.
+
+## En panne ?
+
+- `connect_error: Jeton invalide.` dans la console : la session de l'onglet
+  date d'avant le jalon 1. Rejoignez une nouvelle partie.
+- `socket.data.player` est `undefined` dans `chat:send` : le jeton ne part
+  pas. Vérifiez l'option `auth` de `io(…)`, et que `home.jsx` l'enregistre.
+- Tout le monde est spectateur, même l'animateur : `readSession` reçoit
+  `socket.request`, pas `socket`.
+- Le salon ne voit pas un départ : `disconnect` n'appelle pas
+  `broadcastState`, ou appelle-le avec un code `undefined` (le `join` n'a pas
+  rempli `socket.data.code`).

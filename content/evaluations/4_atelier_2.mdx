@@ -45,7 +45,7 @@ git checkout main
 git pull
 git checkout -b atelier-2
 npm install
-docker compose up -d postgres   # sans Docker : rien à faire
+docker compose up -d postgres   # sans Docker : DATABASE_URL=sqlite:data/quizm9.db dans server/.env
 npm run dev
 ```
 
