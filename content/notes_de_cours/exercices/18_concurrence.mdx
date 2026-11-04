@@ -1,0 +1,531 @@
+---
+sidebar_position: 18
+sidebar_label: 17. Un seul gagnant
+description: "Quiz M9, semaine 11 : quatre bogues de concurrence, corrigés un par un, avec des tests fournis."
+---
+
+# Exercice 17 : un seul gagnant
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre.
+
+:::
+
+Quiz M9 fonctionne quand on le teste à la main. Avec plusieurs joueurs qui
+agissent au même instant, il enregistre des réponses en double et compte des
+points deux fois. Cet exercice corrige quatre bogues de concurrence, un par
+jalon.
+
+Les quatre bogues ont la même forme : le code **lit** une valeur, **vérifie**
+une condition, puis **écrit**, et une autre requête passe entre la lecture
+et l'écriture. Les quatre corrections suivent la même règle : la
+vérification se fait **dans la requête SQL qui écrit**.
+
+| Jalon | Le bogue | La technique |
+|---|---|---|
+| 1 | un joueur répond deux fois | la contrainte d'unicité |
+| 2 | une question est close deux fois | l'`UPDATE` conditionnel |
+| 3 | le double-clic de l'animateur | l'état attendu, envoyé par le client |
+| 4 | une réponse arrive pendant la clôture | l'`INSERT` conditionnel et `FOR SHARE` |
+
+Lisez d'abord la note
+[Lire, vérifier, écrire](/notes_de_cours/concurrence/lire_verifier_ecrire),
+puis gardez-la ouverte : chaque jalon applique une de ses sections.
+
+## Rappels sur Quiz M9
+
+**L'état d'une partie.** Une partie est une ligne de la table `game`. Trois
+colonnes décrivent où elle en est :
+
+| Colonne | Contenu |
+|---|---|
+| `state` | l'étape en cours : `'lobby'`, `'question'`, `'results'` ou `'finished'` |
+| `question_index` | le rang de la question courante (`-1` dans le salon) |
+| `question_started_at` | l'heure d'ouverture de la question, `NULL` hors d'une question |
+
+Une partie passe d'une étape à l'autre dans un ordre fixe :
+
+| De | Vers | Quand |
+|---|---|---|
+| `'lobby'` (le salon d'attente) | `'question'` | l'animateur lance la partie |
+| `'question'` | `'results'` | la question est close : les points sont calculés |
+| `'results'` (le classement) | `'question'` | l'animateur passe à la question suivante |
+| `'results'` | `'finished'` | il n'y a plus de question |
+
+Chaque passage est un `UPDATE` de la ligne `game`. Les bogues de cet
+exercice arrivent quand deux requêtes veulent faire le même passage en même
+temps.
+
+**Qui clôt une question ?** `closeQuestion` (`server/src/game.js`) calcule
+les points et passe la partie à `'results'`. Elle peut être appelée de
+plusieurs endroits :
+
+- le minuteur du serveur, `closeAtDeadline` (`server/src/realtime.js`) ;
+- l'animateur, par `POST /api/games/:code/next` ;
+- toute route qui appelle `closeQuestionIfExpired` : `GET /api/games/:code`
+  et `POST /api/games/:code/answers`.
+
+À l'échéance, plusieurs de ces appels peuvent donc arriver en même temps.
+
+**Le repository.** Tout le SQL est dans `server/src/repository/`. Deux
+choses à vous rappeler :
+
+- `pool.query` retourne `{ rows, rowCount }` : les lignes retournées, et le
+  nombre de lignes touchées par un `INSERT` ou un `UPDATE` ;
+- plusieurs fonctions ont un dernier paramètre `db = pool`. Dans
+  `withTransaction(async (tx) => { … })`, on leur passe `tx` pour qu'elles
+  s'exécutent **dans** la transaction. Sans `tx`, la requête part sur une
+  autre connexion, hors transaction.
+
+**Le pointage.** Une question vaut 10 points au maximum. La colonne
+`answer.points` vaut `NULL` tant que la question n'est pas close.
+
+## Les tests sont fournis
+
+Le fichier `server/test/concurrence.test.js` contient 16 tests, qui échouent
+au départ. Chaque jalon en fait passer quelques-uns :
+
+```bash
+npm run test:concurrence -w server
+```
+
+| Après le jalon | Tests qui passent | Total |
+|---|---|---|
+| 0 | aucun | 0 / 16 |
+| 1 | J1.1 à J1.4 | 4 / 16 |
+| 2 | J2.1 à J2.4 | 8 / 16 |
+| 3 | J3.1 à J3.5 | 13 / 16 |
+| 4 | J4.1 à J4.3 | 16 / 16 |
+
+Chaque étape ci-dessous dit quel test elle fait passer. Si un test reste
+rouge, lisez-le : son code est la spécification.
+
+Vous y trouverez deux sortes de tests, décrites dans
+[Tester une course](/notes_de_cours/concurrence/lire_verifier_ecrire#tester-une-course) :
+
+- la course **réelle** : plusieurs requêtes lancées ensemble avec
+  `Promise.all` (J1.4, J2.3, J2.4, J3.5, J4.3) ;
+- la course **au ralenti** : le test rejoue les étapes une à la fois, dans
+  l'ordre fautif (J2.2, J3.4, J4.1). L'écriture part d'une lecture périmée
+  et doit être refusée.
+
+## Jalon 0 : la tempête
+
+Le point de départ est la solution de la semaine 10.
+
+```bash
+git checkout main
+git pull
+git checkout -b sem-11
+npm install
+docker compose up -d postgres   # sans Docker : DATABASE_URL=sqlite:data/quizm9.db dans server/.env
+npm run dev
+```
+
+À la main, vous n'arriverez pas à envoyer deux requêtes dans la même
+milliseconde. Le script `attacks/tempete.js` le fait pour vous.
+
+1. Connectez-vous (`alice` / `alice`) et créez une partie sur « Révision
+   express ». **Ne la lancez pas.**
+2. Dans un autre terminal :
+
+   ```bash
+   node attacks/tempete.js CODE
+   ```
+
+   Douze robots rejoignent la partie. À la première question, chacun répond
+   deux fois en même temps (comme un joueur qui touche deux fois son choix), puis tous redemandent l'état
+   de la partie à l'échéance, comme douze navigateurs qui se reconnectent.
+3. Lancez la question et attendez la fin des 20 secondes.
+4. Affichez les réponses enregistrées et le score de chaque joueur :
+
+   ```bash
+   docker compose exec postgres psql -U quizm9 -c "SELECT a.id, p.nickname, a.question_id, a.choice_id, a.answered_at, a.points, p.score FROM answer a JOIN player p ON p.id = a.player_id ORDER BY p.nickname, a.id;"
+   ```
+
+**Observer.** Deux symptômes, dans le terminal de la tempête et dans la
+table :
+
+- **plus de réponses acceptées que de robots** : un même joueur a deux
+  lignes dans `answer` pour la même question ;
+- **des scores au-dessus de 10** après une seule question : des points ont
+  été ajoutés plus d'une fois.
+
+
+## Jalon 1 : une réponse par joueur
+
+- **Fichiers** : `server/data/schema.sql`, `server/data/schema.sqlite.sql`,
+  `server/src/repository/games.js`, `server/src/app.js`
+- **Note** : [La contrainte d'unicité](/notes_de_cours/concurrence/lire_verifier_ecrire#1-la-contrainte-dunicité)
+
+**Le bogue.** La route appelle `findAnswer`, puis `recordAnswer`. Les deux
+requêtes du même joueur appellent `findAnswer` avant que l'une d'elles
+ait inséré : chacune conclut que le joueur n'a pas encore répondu.
+
+**La correction.** « Un joueur, une réponse par question » est une règle sur
+les données : on la confie à la base, qui la vérifie au moment d'écrire.
+
+1. **La contrainte.** Dans `server/data/schema.sql` et
+   `server/data/schema.sqlite.sql`, à la fin, remplacez le commentaire sur
+   `(game_id, player_id, question_id)` par :
+
+   ```sql
+   CREATE UNIQUE INDEX IF NOT EXISTS answer_once ON answer (game_id, player_id, question_id);
+   ```
+
+   Le schéma est rejoué à chaque démarrage du serveur : l'index s'ajoute à
+   votre table existante.
+
+   ✔ **J1.1**
+
+2. **Un doublon n'est pas une erreur.** Avec l'index seul, le deuxième
+   `INSERT` lève une exception, et la route répondrait 500. Dans
+   `server/src/repository/games.js`, fonction `recordAnswer`, ajoutez
+   `ON CONFLICT DO NOTHING` avant `RETURNING id`. Sans ligne insérée, `rows`
+   est vide : retournez `rows[0]?.id ?? null`.
+   (`number|null`).
+
+   ✔ **J1.2**
+
+3. **La route.** Dans `server/src/app.js`, route
+   `POST /api/games/:code/answers` :
+   - supprimez la vérification `findAnswer` : c'est la base qui tranche
+     maintenant. La garder donnerait l'impression d'une protection qu'elle
+     n'offre pas ;
+   - gardez l'id retourné par `recordAnswer`. S'il vaut `null`, répondez
+     `409` avec `{ error: 'Ce joueur a déjà répondu.' }`.
+
+   Pourquoi 409 et non 400 ? Voir
+   [la règle](/notes_de_cours/concurrence/lire_verifier_ecrire#la-règle--vérifier-au-moment-décrire).
+
+   ✔ **J1.3**, **J1.4**
+
+**Vérifier.** Redémarrez le serveur. S'il refuse de démarrer, la tempête a
+laissé des doublons dans votre base : voir [En panne ?](#en-panne-). Relancez
+la tempête sur une nouvelle partie : 12 réponses pour 12 robots. Des scores
+dépassent encore 10 : c'est le jalon 2.
+
+:::tip[À retenir]
+
+Une règle d'unicité se garantit par une contrainte dans la base, pas par un
+`SELECT` avant l'`INSERT`. Le perdant de la course l'apprend par le résultat
+de sa requête : ici, `rows` est vide.
+
+:::
+
+## Jalon 2 : une seule clôture
+
+- **Fichiers** : `server/src/repository/games.js`,
+  `server/src/repository/index.js`, `server/src/game.js`
+- **Note** : [L'UPDATE conditionnel](/notes_de_cours/concurrence/lire_verifier_ecrire#2-lupdate-conditionnel)
+
+**Le bogue.** À l'échéance, le minuteur et les douze robots appellent
+`closeQuestion` presque en même temps. Chacun a lu la partie à l'état
+`'question'`, chacun passe le test `game.state !== 'question'`, et chacun
+ajoute les points.
+
+La transaction de la semaine 10 n'y change rien. Elle garantit que les
+écritures d'**une** clôture réussissent ensemble. Elle n'empêche pas **deux**
+clôtures de s'exécuter l'une après l'autre.
+
+**La correction.** `updateGameState` écrit le nouvel état sans condition. On
+la remplace par une fonction qui écrit seulement si la partie est encore
+dans l'état qu'on a lu, et qui dit si elle a réussi. Une seule clôture
+réussit cette transition : c'est la seule qui a le droit de compter les
+points.
+
+1. **La transition conditionnelle.** Dans `server/src/repository/games.js`,
+   écrivez :
+
+   ```js
+   /**
+    * Fait passer la partie de l'état `from` à l'état `to`, SEULEMENT si elle
+    * est encore dans l'état `from`.
+    *   from : { state, questionIndex }
+    *   to   : { state, questionIndex, questionStartedAt }
+    * @returns {Promise<boolean>} true si la partie a changé
+    */
+   export async function transitionGame(gameId, from, to, db = pool) {
+     const { rowCount } = await db.query(
+       `UPDATE game SET state = $1, question_index = $2, question_started_at = $3
+         WHERE id = $4 AND …`,
+       [to.state, to.questionIndex, to.questionStartedAt, gameId, from.state, from.questionIndex],
+     );
+     // …
+   }
+   ```
+
+   Complétez le `WHERE` (les valeurs `$5` et `$6` sont déjà dans le tableau)
+   et la valeur de retour, à partir de `rowCount`. Exportez-la dans
+   `server/src/repository/index.js`.
+
+   ✔ **J2.1**
+
+2. **Lire dans la transaction.** Dans `server/src/repository/games.js`,
+   ajoutez le paramètre `db = pool` à `getAnswersForQuestion`, comme celui de
+   `setAnswerPoints`.
+
+3. **`closeQuestion` ne gagne qu'une fois.** Dans `server/src/game.js`,
+   fonction `closeQuestion` :
+   - au début de la transaction, **avant** de lire les réponses : la
+     transition de `{ state: 'question', questionIndex: game.question_index }`
+     vers `results` (même index, `questionStartedAt: null`), avec `tx` ;
+   - si elle échoue, `return false` : une autre requête a clos la question ;
+   - puis lisez les réponses avec `tx` (déplacez la lecture dans la
+     transaction). La boucle des points ne change pas ;
+   - supprimez l'appel à `updateGameState`, remplacé par la transition ;
+   - `closeQuestion` retourne `true` si c'est elle qui a clos, `false`
+     sinon (y compris au tout début, si `game.state !== 'question'`).
+
+   **L'ordre compte.** L'`UPDATE` verrouille la ligne `game` jusqu'au
+   `COMMIT`. Une deuxième clôture attend ce verrou, relit la ligne, trouve
+   `'results'` et repart avec `false`, sans avoir touché aux points. Si la
+   transition venait après la boucle des points, la perdante les aurait déjà
+   ajoutés.
+
+   ✔ **J2.2**, **J2.3**, **J2.4**
+
+**Vérifier.** La tempête : plus aucun score au-dessus de 10.
+
+:::tip[À retenir]
+
+Un changement d'état s'écrit avec l'état attendu dans le `WHERE`, et
+`rowCount` désigne le gagnant. Dans une transaction, cet `UPDATE` vient en
+premier : tout ce qui suit n'est exécuté que par le gagnant.
+
+:::
+
+## Jalon 3 : le double-clic de l'animateur
+
+- **Fichiers** : `server/src/app.js`, `server/src/game.js`,
+  `client/app/api.js`, `client/app/routes/lobby.jsx`,
+  `client/app/routes/game.jsx`
+- **Note** : [L'état attendu, envoyé par le client](/notes_de_cours/concurrence/lire_verifier_ecrire#3-létat-attendu-envoyé-par-le-client)
+
+**Observer.** Jouez jusqu'au classement d'une question, puis double-cliquez
+sur « Question suivante » : la question suivante s'affiche et se clôt aussitôt.
+
+**Le bogue.** `POST /next` veut dire « fais avancer la partie d'un pas » :
+de `'results'` vers la question suivante, ou de `'question'` vers
+`'results'`. Le premier clic ouvre la question suivante. Le deuxième, envoyé
+depuis le même écran, arrive sur une partie qui est maintenant à
+`'question'` : le serveur la clôt.
+
+Cette course est différente des deux premières : les deux requêtes peuvent
+se suivre sans se croiser. La lecture périmée est dans le **navigateur** :
+le deuxième clic a été fait sur un écran qui n'était plus à jour.
+
+**La correction.** Le client dit sur quel état il a cliqué, et le serveur
+refuse si la partie n'y est plus.
+
+**Rappel.** La ligne `game` lue par le serveur a une colonne
+`question_index`. L'état envoyé aux clients par `publicState` a une
+propriété `questionIndex`. La comparaison se fait entre les deux.
+
+1. **L'état attendu.** Dans `server/src/app.js`, au début de la route
+   `POST /api/games/:code/next`, lisez le corps : `const expected = req.body ?? {}` (pas `state`, ce nom est déjà
+   pris plus bas). Si `expected.state` n'est pas une chaîne ou si
+   `expected.questionIndex` n'est pas un entier (`Number.isInteger`),
+   répondez `400` : la demande est mal formée.
+
+   ✔ **J3.1**
+
+2. Dans la même route, après `closeQuestionIfExpired`, si `expected` ne
+   correspond pas à
+   `game.state` et `game.question_index`, répondez `409` avec
+   `{ error: 'La partie a déjà avancé.' }`. La comparaison vient **après**
+   `closeQuestionIfExpired`, qui peut elle-même changer l'état.
+
+   ✔ **J3.2**, **J3.3**
+
+3. **`advance` ne gagne qu'une fois.** La comparaison de l'étape 2 est
+   elle-même un « lire, vérifier » fait en Node : deux clics vraiment
+   simultanés la passent tous les deux. Il faut encore l'`UPDATE`
+   conditionnel du jalon 2.
+
+   Dans `server/src/game.js`, fonction
+   `advance`, remplacez les deux `updateGameState` par un seul
+   `transitionGame`, de l'état lu
+   (`game.state`, `game.question_index`) vers la question suivante ou vers
+   `finished`. `advance` retourne le résultat de la transition (et `false`
+   si la partie est déjà terminée).
+
+   Dans `server/src/app.js`, route `next`, gardez le résultat de
+   `closeQuestion` ou d'`advance` : s'il vaut `false`, répondez `409`.
+
+   ✔ **J3.4**, **J3.5**
+
+4. **Le client.** Dans `client/app/api.js`,
+   `nextQuestion(code, { state, questionIndex })` envoie ce corps. Dans
+   `client/app/routes/lobby.jsx` et `client/app/routes/game.jsx`, passez
+   `game` à `nextQuestion` : c'est l'état affiché au moment du clic. Dans
+   `client/app/routes/game.jsx`, ajoutez un état
+   `advancing` : vrai pendant l'envoi, il désactive les boutons de
+   l'animateur. Il doit redevenir faux même si l'envoi échoue.
+
+   Un `409` n'est pas une erreur à afficher : le nouvel état de la partie
+   arrive déjà par Socket.IO.
+
+**Vérifier.** Le double-clic : la question reste ouverte. Onglet Réseau :
+un `200`, puis un `409`, ou un seul appel si le bouton était déjà désactivé.
+
+:::tip[À retenir]
+
+Le serveur ne peut pas deviner sur quel écran l'utilisateur a cliqué : le
+client envoie l'état qu'il voyait. Cette vérification traite les requêtes
+qui se suivent, l'`UPDATE` conditionnel celles qui se croisent. Le bouton de l'animateur
+désactivé est un confort, pas une protection.
+
+:::
+
+## Jalon 4 : la réponse pendant la clôture
+
+- **Fichiers** : `server/src/repository/games.js`, `server/src/app.js`
+- **Note** : [L'INSERT conditionnel et `FOR SHARE`](/notes_de_cours/concurrence/lire_verifier_ecrire#4-linsert-conditionnel-et-for-share)
+
+**Le bogue.** La route vérifie `game.state === 'question'`, puis fait
+d'autres lectures (`findPlayer`, `currentQuestion`) avant d'insérer. Une
+clôture peut passer entre les deux : elle lit la liste des réponses, puis
+la réponse est insérée. Elle arrive trop tard pour être comptée.
+
+Le symptôme : après la clôture, une ligne de `answer` dont `points` vaut
+encore `NULL`. Le joueur croit avoir répondu à temps, et n'aura jamais de
+points. Cette course est presque impossible à provoquer à la main : c'est
+le test J4.3 qui la provoque.
+
+**La correction.** Comme aux jalons précédents, la vérification entre dans
+la requête qui écrit. Deux différences :
+
+- un `INSERT … VALUES` n'a pas de `WHERE` : on passe par `INSERT … SELECT` ;
+- la condition porte sur la table `game`, alors qu'on écrit dans `answer`.
+  Une lecture ordinaire de `game` n'attend pas la clôture en cours et voit
+  encore `'question'`. Il faut verrouiller la ligne lue : `FOR SHARE`.
+
+Lisez la section de la note **avant** d'écrire la requête. C'est la partie
+la plus subtile de la semaine.
+
+1. **La route d'abord.** Dans `server/src/app.js`, route
+   `POST /api/games/:code/answers`, passez `game.question_index` en sixième
+   argument de `recordAnswer` (ignoré pour l'instant). Le `409` couvre maintenant
+   deux cas : `{ error: 'Déjà répondu, ou la question est close.' }`.
+
+   La vérification `game.state !== 'question'` du début de la route reste
+   en place : elle répond vite dans le cas évident. Ce n'est plus elle qui
+   protège.
+
+2. Dans `server/src/repository/games.js`, `recordAnswer` reçoit ce sixième
+   paramètre, `questionIndex`, et n'insère que si la partie est encore sur
+   cette question :
+
+   ```sql
+   INSERT INTO answer (game_id, player_id, question_id, choice_id, answered_at)
+   SELECT $1, $2, $3, $4, $5
+    WHERE EXISTS (
+      SELECT 1 FROM game
+       WHERE id = $1 AND state = 'question' AND question_index = $6
+         FOR SHARE
+    )
+   ON CONFLICT DO NOTHING
+   RETURNING id
+   ```
+
+   Avant de passer à la suite, assurez-vous de pouvoir dire le rôle de
+   chaque morceau : le `SELECT` extérieur, `WHERE EXISTS`, la condition sur
+   `question_index`, `FOR SHARE`, `ON CONFLICT DO NOTHING`.
+
+   ✔ **J4.1**, **J4.2**, **J4.3**
+
+3. **Voir `FOR SHARE` à l'œuvre.** Sous PostgreSQL, retirez `FOR SHARE` et
+   relancez les tests : J4.1 et J4.2 passent toujours, J4.3 échoue
+   (relancez-le au besoin, une course ne se produit pas à chaque
+   exécution). Dans les deux premiers, la clôture est déjà confirmée quand
+   la réponse arrive. Seul J4.3 insère **pendant** la clôture. Remettez
+   `FOR SHARE`.
+
+**Vérifier.**
+
+```bash
+npm test
+```
+
+`fail 0` : les 16 tests de concurrence, et tous les anciens.
+
+:::tip[À retenir]
+
+Une lecture ordinaire n'attend jamais : elle voit la dernière version
+**confirmée**. Quand la condition d'une écriture porte sur une autre ligne,
+qu'une transaction est peut-être en train de modifier, on verrouille cette
+ligne avec `FOR SHARE`. La réponse est alors soit refusée, soit comptée,
+jamais enregistrée sans points.
+
+:::
+
+## Vérifiez votre compréhension
+
+Vous devriez pouvoir répondre à ces questions sans regarder votre code. Les
+réponses sont dans la note.
+
+1. Dans la route des réponses de la semaine 10, quelles sont les trois
+   étapes du patron fautif, et où une autre requête peut-elle s'intercaler ?
+2. `closeQuestion` utilisait déjà une transaction. Pourquoi n'empêchait-elle
+   pas la double clôture ?
+3. Deux `UPDATE … WHERE state = 'question'` arrivent en même temps. Que fait
+   le deuxième pendant que le premier s'exécute, et pourquoi son `rowCount`
+   vaut-il 0 ?
+4. Pourquoi la transition doit-elle être la première requête de la
+   transaction de clôture ?
+5. Au jalon 3, l'état attendu ne suffit pas sans l'`UPDATE` conditionnel, et
+   l'`UPDATE` conditionnel ne suffit pas sans l'état attendu. Donnez le cas
+   que chacun laisse passer seul.
+6. Pourquoi désactiver le bouton « Question suivante » pendant l'envoi ne
+   protège-t-il pas le serveur ?
+7. Sans `FOR SHARE`, que voit l'`INSERT` pendant qu'une clôture est en
+   cours ? Qu'arrive-t-il à la réponse ?
+8. Avec `FOR SHARE`, décrivez ce qui se passe si la clôture arrive en
+   premier, puis si la réponse arrive en premier.
+9. Pourquoi `FOR SHARE` plutôt que `FOR UPDATE` ?
+10. Pourquoi J4.3 passe-t-il sous SQLite même sans `FOR SHARE` ?
+11. Dans quel cas répond-on 409 plutôt que 400 ?
+
+## Pour aller plus loin
+
+- **Le même pseudonyme, deux fois.** Dans `server/src/app.js`, la route
+  `POST /api/games/:code/players` vérifie
+  `findPlayer`, puis insère. Deux joueurs qui choisissent `zoé` en même temps :
+  la contrainte `UNIQUE (game_id, nickname)` existe déjà, mais la deuxième
+  requête reçoit une erreur 500. Corrigez-la en 409, et écrivez le test.
+- **Rejoindre pendant le lancement.** Même route : `game.state !== 'lobby'`,
+  puis l'insertion. Rendez l'insertion conditionnelle, comme au jalon 4.
+- **Pourquoi pas le chat ?** Dans `server/src/realtime.js`, `nextMessageId++` lit, puis
+  écrit une variable partagée par toutes les connexions. Pourquoi deux
+  messages simultanés ne reçoivent-ils jamais le même id ?
+- **Pour le projet 2.** Écrivez le test « deux coups joués en même temps sur
+  la même position : un seul est accepté », puis faites-le passer.
+
+La solution (branche `sol-11`) a un commit par jalon, plus la démonstration
+de l'horloge du client faite en classe.
+
+## En panne ?
+
+- **Le serveur refuse de démarrer** : `could not create unique index
+  "answer_once"` (PostgreSQL) ou `UNIQUE constraint failed` (SQLite). La
+  tempête du jalon 0 a laissé des doublons. Remettez la base à zéro :
+  `docker compose down -v`, puis `docker compose up -d postgres`. Sans
+  Docker : supprimez `server/data/quizm9.db`.
+- `ECONNREFUSED 127.0.0.1:5432` dans les tests : PostgreSQL ne tourne pas,
+  `docker compose up -d postgres`.
+- `repository.transitionGame is not a function` : elle n'est pas exportée
+  dans `repository/index.js`.
+- **J2.2 ou J2.3 compte encore les points en double** : la transition n'est
+  pas la première requête de la transaction, ou elle reçoit le pool au lieu
+  de `tx`.
+- `Identifier 'state' has already been declared` : dans la route `next`,
+  nommez le corps `expected`.
+- **J3.1 à J3.3 passent, mais pas J3.5** : la route compare bien l'état
+  attendu, mais `advance` écrit encore sans condition.
+- **J4.3 échoue sous PostgreSQL, mais passe sous SQLite** : il manque
+  `FOR SHARE`.
+- **Un test de course passe avant sa correction** : ça peut arriver (la
+  course ne se produit pas à chaque exécution). Les tests rejoués pas à pas
+  (J2.2, J3.4, J4.1) échouent, eux, à coup sûr.

@@ -1,0 +1,569 @@
+---
+sidebar_position: 1
+sidebar_label: Lire, vérifier, écrire
+description: "Deux requêtes qui se croisent : la contrainte d'unicité, l'UPDATE conditionnel, l'état attendu et FOR SHARE."
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Lire, vérifier, écrire
+
+Node exécute une seule chose à la fois. Mais chaque `await` rend la main :
+pendant qu'une requête attend la base, une autre avance. Deux requêtes sur
+la même partie peuvent donc **s'entrelacer**.
+
+Tant qu'on teste à la main, ça n'arrive pas : deux clics n'arrivent jamais dans
+la même milliseconde. Par contre, s'il y a plusieurs joueurs, un réseau
+lent ou un script qui envoie deux requêtes cela peut arriver.
+
+Quand le résultat dépend de l'ordre dans lequel deux requêtes s'entrelacent,
+on parle d'une **course** (*race condition*). C'est un bogue difficile à
+voir : le code est correct pour une requête seule, et il passe presque
+toujours.
+
+## Le patron fautif
+
+Voici la route qui enregistre une réponse dans Quiz M9 (semaine 10) :
+
+```js
+if (await repository.findAnswer(game.id, player.id, question.id)) {   // 1. lire
+  return res.status(400).json({ error: 'Ce joueur a déjà répondu.' }); // 2. vérifier
+}
+await repository.recordAnswer(game.id, player.id, question.id, …);    // 3. écrire
+```
+
+Sur son téléphone, le joueur touche deux fois de suite le bouton de son choix
+de réponse. Deux requêtes `POST /answers` partent et arrivent ensemble :
+
+| Requête A | Requête B |
+|---|---|
+| `findAnswer` : aucune réponse | |
+| | `findAnswer` : aucune réponse |
+| `recordAnswer` | |
+| | `recordAnswer` : **un doublon** |
+
+Chacune a vérifié, et chacune avait raison **au moment de lire**. Une valeur
+lue est **périmée** dès qu'on l'a : entre la lecture et l'écriture, une autre
+requête peut la changer.
+
+Le patron se reconnaît à ses trois étapes : **lire** une valeur, **vérifier**
+une condition sur cette valeur, puis **écrire**, avec au moins un `await`
+entre la lecture et l'écriture. La décision d'écrire repose alors sur une
+valeur qui n'est peut-être plus vraie.
+
+Le même patron se cache à trois autres endroits de Quiz M9 :
+
+<Tabs>
+<TabItem value="double-cloture" label="Double clôture">
+
+Le minuteur (`closeAtDeadline`) et la route `POST /next` lisent chacun la
+partie, puis appellent `closeQuestion` :
+
+```js
+// realtime.js (le minuteur) ou authorization.js (requireGameHost)
+const game = await repository.findGameByCode(code);                   // 1. lire
+
+// game.js, closeQuestion(game)
+if (game.state !== 'question') return;                                 // 2. vérifier
+const answers = await repository.getAnswersForQuestion(game.id, question.id);
+await repository.withTransaction(async (tx) => {
+  for (const answer of answers) {
+    // … calculateScore
+    await repository.addPointsToPlayer(answer.player_id, points, tx); // 3. écrire
+  }
+  await repository.updateGameState(game.id, 'results', game.question_index, null, tx);
+});
+```
+
+L'animateur clique au moment où le minuteur expire :
+
+| Minuteur | Clic de l'animateur |
+|---|---|
+| `findGameByCode` : `'question'` | |
+| | `requireGameHost` : `'question'` |
+| `closeQuestion` : ajoute les points | |
+| | `closeQuestion` : ajoute les points **une deuxième fois** |
+
+La transaction n'y change rien : elle garantit que les écritures réussissent
+ensemble, pas que la vérification est encore vraie.
+
+</TabItem>
+<TabItem value="double-clic" label="Double-clic de l'animateur">
+
+Ici, la lecture se fait dans le navigateur : l'animateur voit les résultats
+et clique deux fois sur « Question suivante » avant que le nouvel état
+n'arrive par Socket.IO.
+
+```js
+// client : l'écran affiche 'results'                         1. lire
+
+// app.js, POST /api/games/:code/next
+const game = req.game;
+await closeQuestionIfExpired(game);
+if (game.state === 'question') {  // 2. vérifier : l'état du serveur, pas celui de l'écran
+  await closeQuestion(game);      // 3. écrire
+} else {
+  await advance(game);            // 3. écrire
+}
+```
+
+Le deuxième clic arrive après que le premier a fini :
+
+| Clic 1 | Clic 2 |
+|---|---|
+| l'écran affiche les résultats | l'écran affiche les résultats |
+| `state = 'results'` : `advance`, la question 3 s'ouvre | |
+| | `state = 'question'` : `closeQuestion`, **la question 3 est close aussitôt** |
+
+Les deux clics voulaient dire « passer à la suivante ». Le serveur, lui, ne
+voit que l'état courant.
+
+</TabItem>
+<TabItem value="reponse-tardive" label="Réponse après la clôture">
+
+```js
+// app.js, POST /api/games/:code/answers
+const game = await requestedGame(req, res);                      // 1. lire
+await closeQuestionIfExpired(game);
+if (game.state !== 'question') {                                 // 2. vérifier
+  return res.status(400).json({ error: 'Aucune question en cours.' });
+}
+// … findPlayer, currentQuestion, findAnswer : autant d'await
+await repository.recordAnswer(game.id, player.id, question.id, choiceId, Date.now()); // 3. écrire
+```
+
+Un joueur répond juste avant l'échéance :
+
+| Réponse | Clôture |
+|---|---|
+| `requestedGame` : `'question'` | |
+| | `getAnswersForQuestion` : lit les réponses |
+| `recordAnswer` : **insère** | |
+| | calcule les points des réponses lues, `state = 'results'` |
+| la réponse reste sans points | |
+
+Chaque `await` entre la lecture et l'écriture élargit la fenêtre.
+
+</TabItem>
+</Tabs>
+
+## La règle : vérifier au moment d'écrire
+
+Vérifier en Node avant d'écrire ne suffit jamais. La vérification doit faire
+partie de l'écriture, dans **une seule requête SQL**. La base exécute cette
+requête d'un bloc : aucune autre ne peut s'intercaler entre la vérification
+et l'écriture.
+
+Pourquoi la base et pas Node ? Entre deux `await`, Node peut servir une autre
+requête HTTP. La base, elle, ne laisse jamais deux requêtes modifier la même
+ligne en même temps : la deuxième attend que la première ait fini, puis
+vérifie la condition sur la ligne **à jour**.
+
+C'est la **concurrence optimiste** : on ne bloque personne d'avance. On écrit
+« à condition que rien n'ait changé », et celui qui arrive second l'apprend
+par le résultat de sa requête (`rows` vide ou `rowCount = 0`).
+
+La route, elle, répond au perdant par **409 Conflict**, et non par 400 :
+
+| Code | Sens |
+|---|---|
+| 400 | la demande est invalide, la refaire telle quelle ne servira à rien |
+| 409 | la demande était valide, mais la ressource a changé entre-temps |
+
+Dans Quiz M9, un client qui reçoit 409 n'a rien à faire : le nouvel état de
+la partie lui arrive de toute façon par Socket.IO.
+
+Chaque bogue de la section précédente a sa correction :
+
+| Bogue | Correction |
+|---|---|
+| Double réponse | 1. La contrainte d'unicité |
+| Double clôture | 2. L'UPDATE conditionnel |
+| Double-clic de l'animateur | 3. L'état attendu, appuyé par l'UPDATE conditionnel |
+| Réponse après la clôture | 4. L'INSERT conditionnel et `FOR SHARE` |
+
+### 1. La contrainte d'unicité
+
+Un joueur, une réponse par question : c'est une règle sur les données. La
+base sait la garantir elle-même.
+
+```sql title="server/data/schema.sql"
+CREATE UNIQUE INDEX IF NOT EXISTS answer_once ON answer (game_id, player_id, question_id);
+```
+
+Un index plutôt qu'une clause `UNIQUE` dans `CREATE TABLE` : la table existe
+déjà dans votre base, et `CREATE TABLE IF NOT EXISTS` ne la modifierait pas.
+`CREATE UNIQUE INDEX IF NOT EXISTS`, lui, s'ajoute à une table existante.
+
+Reprenons la double réponse. Les deux `INSERT` arrivent ensemble, mais la
+base vérifie l'index **au moment d'écrire** : le deuxième attend la fin du
+premier, puis constate que la ligne existe déjà. Peu importe ce que
+`findAnswer` avait répondu plus tôt.
+
+Un doublon lève maintenant une erreur. Pour qu'il soit simplement ignoré :
+
+```sql
+INSERT INTO answer (…) VALUES (…)
+ON CONFLICT DO NOTHING
+RETURNING id
+```
+
+Sans conflit, `RETURNING` donne l'id de la ligne insérée. En cas de conflit,
+rien n'est inséré et `rows` est vide : `rows[0]?.id ?? null` vaut `null`, et
+la route répond **409**.
+
+### 2. L'UPDATE conditionnel
+
+Rappel de la double clôture : le minuteur et le clic de l'animateur lisent
+tous deux la partie à l'état `'question'`, passent le test
+`if (game.state !== 'question')`, et ajoutent chacun les points.
+
+Ici, il n'y a pas de ligne à insérer, donc pas de contrainte d'unicité
+possible : on change l'état de la partie. La condition va dans le `WHERE` :
+
+```sql
+UPDATE game SET state = 'results'
+ WHERE id = $1 AND state = 'question' AND question_index = $2
+```
+
+`rowCount` dit combien de lignes ont changé : 1 pour la requête qui a gagné,
+0 pour celle qui arrive trop tard. C'est le `if (game.state !== 'question')`
+de `closeQuestion`, déplacé dans la requête qui écrit.
+
+Un `UPDATE` **verrouille** la ligne qu'il modifie : tant qu'il n'est pas
+confirmé (`COMMIT`), aucune autre requête ne peut la modifier.
+
+| Requête A | Requête B |
+|---|---|
+| `UPDATE … WHERE state = 'question'` : la ligne est verrouillée | |
+| | `UPDATE … WHERE state = 'question'` : **attend** le verrou |
+| fin de l'`UPDATE`, `COMMIT` implicite : le verrou est libéré | |
+| | relit la ligne : `state = 'results'`, `rowCount = 0` |
+
+Le point important est la dernière ligne. B n'écrit pas avec ce qu'elle
+avait vu avant d'attendre : une fois le verrou obtenu, PostgreSQL réévalue
+le `WHERE` sur la ligne à jour. La condition n'est plus vraie, donc rien ne
+change.
+
+#### Dans la transaction de clôture
+
+L'`UPDATE` conditionnel désigne un gagnant. Mais clore une question, c'est
+plus qu'un `UPDATE` : il faut aussi inscrire les points de chaque réponse et
+les ajouter au total de chaque joueur. `closeQuestion` fait déjà ces
+écritures dans une
+[transaction](/notes_de_cours/postgresql/postgres_en_conteneur#la-transaction-sur-une-seule-connexion),
+pour qu'elles réussissent ou échouent ensemble. L'`UPDATE` conditionnel
+prend donc place **dans** cette transaction, et deux choses changent.
+
+**Le verrou dure plus longtemps.** Dans le tableau ci-dessus, l'`UPDATE`
+est seul : la base fait un `COMMIT` implicite dès qu'il se termine. Dans une
+transaction explicite, le verrou dure jusqu'au `COMMIT` final. La requête B
+attend donc que A ait fini **toute** sa clôture, points compris.
+
+**L'ordre compte.** La transaction change d'abord l'état, puis lit les
+réponses et calcule les points :
+
+```js
+// game.js, closeQuestion(game)
+// from : l'état lu ('question', cet index) ; to : 'results', même index
+await repository.withTransaction(async (tx) => {
+  const won = await repository.transitionGame(game.id, from, to, tx); // l'UPDATE conditionnel, d'abord
+  if (!won) return false; // rowCount = 0 : une autre requête l'a close avant nous
+  const answers = await repository.getAnswersForQuestion(game.id, question.id, tx);
+  // … les points
+});
+```
+
+Reprenons le minuteur et le clic de l'animateur :
+
+| Minuteur | Clic de l'animateur |
+|---|---|
+| `BEGIN`, `transitionGame` : gagne, la ligne est verrouillée | |
+| | `BEGIN`, `transitionGame` : **attend** le verrou |
+| lit les réponses, ajoute les points, `COMMIT` | |
+| | relit la ligne : `'results'`, `won = false`, **aucun point ajouté** |
+
+Seule la gagnante se rend au calcul des points. Dans l'ordre inverse
+(les points, puis l'`UPDATE`), les deux requêtes ajouteraient les points
+avant de savoir laquelle a gagné.
+
+### 3. L'état attendu, envoyé par le client
+
+Le double-clic de l'animateur est une autre sorte de course. Le deuxième
+clic arrive souvent **après** que le premier a fini : rien de simultané. Le
+problème, c'est que le deuxième clic voulait dire « passer à la question
+suivante », mais la partie a déjà changé.
+
+Le serveur ne peut pas deviner l'intention. Le client l'envoie donc : l'état
+qu'il avait **sous les yeux** au moment du clic.
+
+```js
+// client
+nextQuestion(code, { state: game.state, questionIndex: game.questionIndex });
+```
+
+```js
+// serveur
+if (expected.state !== game.state || expected.questionIndex !== game.question_index) {
+  return res.status(409).json({ error: 'La partie a déjà avancé.' });
+}
+```
+
+#### Deux clics qui se suivent
+
+L'animateur regarde les résultats de la question 2 (index 1) et clique deux
+fois. Les deux clics envoient le même état attendu, celui de l'écran :
+`{ state: 'results', questionIndex: 1 }`.
+
+| Clic 1 | Clic 2 |
+|---|---|
+| le serveur lit la partie : `'results'`, index 1 | |
+| l'état attendu correspond : `advance`, la question 3 s'ouvre | |
+| | le serveur lit la partie : `'question'`, index 2 |
+| | l'état attendu ne correspond plus : **409**, rien ne change |
+
+La question 3 reste ouverte. Sans l'état attendu, le serveur aurait vu
+`'question'` et l'aurait close.
+
+#### Deux clics vraiment simultanés
+
+La comparaison `if (expected.state !== game.state …)` du serveur ne suffit
+pourtant pas à elle seule. Regardez-la bien : `game` a été **lu** au début
+de la requête, le `if` le **vérifie** en JavaScript, et l'**écriture** vient
+plus tard, dans `advance`. C'est encore le patron fautif. Si les deux
+requêtes se croisent, elles lisent toutes deux la partie avant que l'une
+d'elles l'ait changée :
+
+| Clic 1 | Clic 2 |
+|---|---|
+| le serveur lit la partie : `'results'`, index 1 | |
+| | le serveur lit la partie : `'results'`, index 1 |
+| l'état attendu correspond | |
+| | l'état attendu correspond **aussi** |
+| `advance` : `transitionGame` gagne, la question 3 s'ouvre | |
+| | `advance` : `transitionGame` retourne `false`, **409** |
+
+Les deux requêtes passent la comparaison. C'est l'`UPDATE` conditionnel de
+la section 2, utilisé aussi par `advance`, qui n'en laisse passer qu'une.
+Sans lui, `advance` s'exécuterait deux fois : la partie sauterait une
+question.
+
+#### Deux protections, deux rôles
+
+| Protection | Ce qu'elle règle | Ce qu'elle laisse passer seule |
+|---|---|---|
+| L'état attendu | deux clics qui se suivent : le deuxième part d'un écran périmé | deux clics simultanés |
+| L'`UPDATE` conditionnel | deux clics simultanés : un seul gagne | deux clics qui se suivent : pour le serveur, le deuxième est une demande valide |
+
+L'état attendu transmet l'**intention** du client. L'`UPDATE` conditionnel
+garantit qu'**un seul** gagne. Il faut les deux.
+
+#### Et désactiver le bouton ?
+
+Dans le navigateur, on désactive le bouton « Question suivante » pendant
+l'envoi. C'est un confort pour l'animateur, pas une protection : un script,
+un réseau lent ou un deuxième onglet passent à côté. La protection est
+toujours sur le serveur.
+
+### 4. L'INSERT conditionnel et `FOR SHARE`
+
+Une réponse ne doit être insérée que si la question est encore ouverte.
+C'est le cas le plus subtil : la condition porte sur la table `game`, mais
+l'écriture se fait dans la table `answer`. On ne peut pas simplement ajouter
+un `WHERE` comme pour l'`UPDATE`.
+
+#### Mettre une condition sur un INSERT
+
+`INSERT … VALUES` insère toujours sa ligne. `INSERT … SELECT`, lui, insère
+les lignes que le `SELECT` produit : une ligne, ou aucune.
+
+```sql
+INSERT INTO answer (game_id, player_id, question_id, choice_id, answered_at)
+SELECT $1, $2, $3, $4, $5
+ WHERE EXISTS (
+   SELECT 1 FROM game
+    WHERE id = $1 AND state = 'question' AND question_index = $6
+      FOR SHARE
+ )
+ON CONFLICT DO NOTHING
+RETURNING id
+```
+
+La requête se lit de l'intérieur vers l'extérieur :
+
+1. Le `SELECT` intérieur cherche la partie, à condition qu'elle soit encore
+   à l'état `'question'` et sur la question `$6`.
+2. `WHERE EXISTS` est vrai si ce `SELECT` a trouvé la ligne.
+3. Le `SELECT` extérieur n'a pas de `FROM` : il produit une seule ligne,
+   faite des valeurs `$1` à `$5`, ou aucune si `EXISTS` est faux.
+4. `INSERT` insère ce que le `SELECT` extérieur a produit.
+
+Trois issues sont possibles :
+
+| Situation | Résultat |
+|---|---|
+| La question est ouverte, première réponse du joueur | la ligne est insérée, `RETURNING` donne son id |
+| Le joueur a déjà répondu | `ON CONFLICT DO NOTHING` : `rows` est vide |
+| La question est close | `EXISTS` est faux, rien à insérer : `rows` est vide |
+
+Vérifier et insérer forment maintenant une seule requête. Sans `FOR SHARE`,
+ce n'est pourtant pas encore suffisant.
+
+#### Une lecture n'attend jamais
+
+Deux règles de PostgreSQL expliquent pourquoi :
+
+- une écriture **non confirmée** (avant le `COMMIT`) est invisible pour les
+  autres requêtes ;
+- une lecture ordinaire **n'attend jamais** un verrou. Si la ligne est en
+  train d'être modifiée, PostgreSQL lui montre la dernière version
+  confirmée, celle d'avant la modification.
+
+En général, c'est ce qu'on veut : une longue transaction ne bloque pas les
+lectures de tout le monde. Ici, c'est un piège.
+
+À la section 2, les deux requêtes en course étaient des `UPDATE` sur la même
+ligne : la deuxième attendait le verrou de la première. Ici, l'`INSERT`
+écrit dans `answer`, et ne fait que **lire** `game`. Rien ne le fait
+attendre.
+
+Or la clôture est une transaction en plusieurs étapes. Entre son `UPDATE` et
+son `COMMIT`, l'état `'results'` est écrit mais pas confirmé : la question
+est close pour la clôture, mais encore ouverte pour tous les autres.
+
+| Clôture | Réponse, sans `FOR SHARE` |
+|---|---|
+| `BEGIN`, `UPDATE game` : `'results'` | |
+| lit les réponses | |
+| | lit `game` sans attendre : voit `'question'`, **insère** |
+| calcule les points, `COMMIT` | |
+| | la réponse reste sans points |
+
+La réponse est enregistrée, le joueur croit avoir répondu à temps, mais la
+clôture avait déjà lu la liste des réponses : celle-ci n'aura jamais de
+points.
+
+#### Ce que fait `FOR SHARE`
+
+`FOR SHARE` transforme la lecture ordinaire en lecture **avec verrou** :
+« je lis cette ligne, et personne ne doit la modifier tant que je n'ai pas
+terminé ». Ce verrou a deux effets, selon qui arrive en premier.
+
+**La clôture arrive en premier.** Son `UPDATE` détient déjà un verrou sur la
+ligne `game`. Le `FOR SHARE` de la réponse doit attendre le `COMMIT`. Comme
+pour l'`UPDATE` conditionnel, PostgreSQL relit ensuite la ligne à jour :
+
+| Clôture | Réponse, avec `FOR SHARE` |
+|---|---|
+| `BEGIN`, `UPDATE game` : `'results'` | |
+| lit les réponses | |
+| | `FOR SHARE` : **attend** le verrou |
+| calcule les points, `COMMIT` | |
+| | relit la ligne : `'results'`, `EXISTS` est faux, **rien d'inséré** |
+
+La réponse est refusée : `rows` est vide, comme pour un doublon.
+
+**La réponse arrive en premier.** Elle détient le verrou `FOR SHARE` jusqu'à
+la fin de son `INSERT`. Cette fois, c'est l'`UPDATE` de la clôture qui
+attend :
+
+| Clôture | Réponse, avec `FOR SHARE` |
+|---|---|
+| | `FOR SHARE` : verrouille la ligne `game` |
+| `BEGIN`, `UPDATE game` : **attend** le verrou | |
+| | insère, `COMMIT` implicite : le verrou est libéré |
+| `UPDATE` : `'results'` | |
+| lit les réponses : **celle-ci en fait partie** | |
+| calcule les points, `COMMIT` | |
+
+Dans les deux cas, le résultat est cohérent : la réponse est soit refusée,
+soit comptée. Elle n'est jamais enregistrée sans points.
+
+#### Pourquoi pas `FOR UPDATE` ?
+
+`FOR UPDATE` protégerait aussi la lecture, mais il est exclusif : trente
+joueurs qui répondent en même temps passeraient un à la fois. `FOR SHARE`
+est un verrou **partagé** : il bloque seulement ceux qui veulent modifier
+la ligne.
+
+| Verrou | Qui peut le prendre en même temps |
+|---|---|
+| `FOR SHARE` | d'autres `FOR SHARE` : trente réponses ne s'attendent pas entre elles |
+| `FOR UPDATE`, ou un `UPDATE` | personne : il attend que tous les autres verrous soient libérés |
+
+:::tip[À retenir]
+
+Quand la condition d'une écriture porte sur une **autre** ligne que celle
+qu'on écrit, il faut verrouiller la ligne lue. `FOR SHARE` suffit si on ne
+la modifie pas.
+
+:::
+
+## Tester une course
+
+Une course ne se produit pas à chaque exécution. Un test qui lance dix
+requêtes en même temps (`Promise.all`) peut passer par chance. On écrit donc
+aussi la course **au ralenti** : on lit la partie deux fois, puis on écrit
+avec la première lecture, puis avec la deuxième, qui est périmée.
+
+```js
+const a = await repository.findGameByCode(code);
+const b = await repository.findGameByCode(code); // les deux voient 'question'
+await closeQuestion(a);
+await closeQuestion(b); // doit retourner false et ne rien écrire
+```
+
+Ce test échoue à coup sûr tant que le bogue est là, et passe à coup sûr une
+fois corrigé.
+
+## Et SQLite ?
+
+SQLite verrouille toute la base à chaque écriture, et l'adaptateur de Quiz M9
+n'a qu'une connexion. Il fait donc de son mieux pour imiter PostgreSQL :
+
+- `FOR SHARE` et `FOR UPDATE` sont retirés : SQLite n'en a pas besoin ;
+- les transactions passent à tour de rôle ;
+- chaque requête attend un tour de la boucle d'événements, comme une
+  réponse qui viendrait du réseau. Sans ce délai, les requêtes HTTP ne se
+  croiseraient jamais, et les bogues resteraient invisibles.
+
+PostgreSQL reste la référence : un oubli de `FOR SHARE` passe inaperçu sous
+SQLite.
+
+## L'horloge du client
+
+Le serveur envoie une **échéance** : une heure, lue sur son horloge. Le
+navigateur affiche `échéance − Date.now()`, lu sur **la sienne**. Si
+l'horloge du téléphone a 5 s d'avance, le compte à rebours affiche 5 s de
+moins.
+
+La correction : le serveur joint son heure à chaque état (`serverNow`), et
+le navigateur mesure l'écart.
+
+```js
+const offset = game.serverNow - Date.now(); // à la réception
+const remaining = game.question.deadline - (Date.now() + offset);
+```
+
+Ce calcul néglige le délai du réseau, quelques millisecondes en classe. Le
+protocole NTP fait mieux en mesurant l'aller-retour et en le divisant par
+deux.
+
+Le pointage, lui, n'a jamais dépendu du client. `answered_at` est l'heure
+du **serveur** à la réception de la réponse, et `calculateScore` n'est
+appelé que dans `closeQuestion`. Le navigateur n'envoie ni une heure, ni des
+points : rien à falsifier.
+
+## Pour le projet 2
+
+« Un coup joué sur une position périmée est refusé » : c'est l'état attendu
+et l'UPDATE conditionnel. Le client envoie la position qu'il voyait, ou un
+numéro de version, et le serveur écrit à condition qu'elle n'ait pas changé :
+
+```sql
+UPDATE partie SET position = $1, version = version + 1
+ WHERE id = $2 AND version = $3
+```
+
+`rowCount = 0` : quelqu'un a joué avant, réponse 409.
