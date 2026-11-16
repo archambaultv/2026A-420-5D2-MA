@@ -183,8 +183,7 @@ les données : on la confie à la base, qui la vérifie au moment d'écrire.
    `INSERT` lève une exception, et la route répondrait 500. Dans
    `server/src/repository/games.js`, fonction `recordAnswer`, ajoutez
    `ON CONFLICT DO NOTHING` avant `RETURNING id`. Sans ligne insérée, `rows`
-   est vide : retournez `rows[0]?.id ?? null`.
-   (`number|null`).
+   est vide : retournez `rows[0]?.id ?? null` (`number|null`).
 
    ✔ **J1.2**
 
@@ -195,6 +194,23 @@ les données : on la confie à la base, qui la vérifie au moment d'écrire.
      n'offre pas ;
    - gardez l'id retourné par `recordAnswer`. S'il vaut `null`, répondez
      `409` avec `{ error: 'Ce joueur a déjà répondu.' }`.
+
+   La fin de la route devient :
+
+   ```js
+   const question = await currentQuestion(game);
+   // (la vérification findAnswer est supprimée)
+   if (!question.choices.some((c) => c.id === choiceId)) {
+     return res.status(400).json({ error: 'Choix inconnu pour cette question.' });
+   }
+
+   const answerId = await repository.recordAnswer(/* inchangé */);
+   if (/* rien n'a été inséré */) {
+     return res.status(409).json({ error: 'Ce joueur a déjà répondu.' });
+   }
+   await broadcastState(game.code);
+   res.status(201).json({});
+   ```
 
    Pourquoi 409 et non 400 ? Voir
    [la règle](/notes_de_cours/concurrence/lire_verifier_ecrire#la-règle--vérifier-au-moment-décrire).
@@ -278,6 +294,43 @@ points.
    - `closeQuestion` retourne `true` si c'est elle qui a clos, `false`
      sinon (y compris au tout début, si `game.state !== 'question'`).
 
+   `withTransaction` retourne la valeur retournée par sa fonction : c'est
+   ainsi que le résultat sort de la transaction.
+
+   ```js
+   export async function closeQuestion(game) {
+     if (game.state !== 'question') return false;
+     const question = await currentQuestion(game);
+     const correctChoices = /* inchangé */;
+     const questionDurationMs = /* inchangé */;
+     // La lecture des réponses n'est plus ici : elle descend dans la transaction.
+
+     const closed = await repository.withTransaction(async (tx) => {
+       // 1. La transition, en premier.
+       const won = await repository.transitionGame(
+         game.id,
+         { /* l'état lu */ },
+         { /* l'état visé */ },
+         tx,
+       );
+       if (!won) return false; // une autre requête a clos la question
+
+       // 2. Les réponses, lues avec tx.
+       const answers = /* … */;
+
+       // 3. La boucle des points, inchangée.
+       let firstAwarded = false;
+       for (const answer of answers) {
+         /* … */
+       }
+       return true;
+     });
+     game.state = 'results';
+     game.question_started_at = null;
+     return closed;
+   }
+   ```
+
    **L'ordre compte.** L'`UPDATE` verrouille la ligne `game` jusqu'au
    `COMMIT`. Une deuxième clôture attend ce verrou, relit la ligne, trouve
    `'results'` et repart avec `false`, sans avoir touché aux points. Si la
@@ -323,6 +376,34 @@ refuse si la partie n'y est plus.
 `question_index`. L'état envoyé aux clients par `publicState` a une
 propriété `questionIndex`. La comparaison se fait entre les deux.
 
+Après les étapes 1 à 3, la route `next` a cette forme :
+
+```js
+app.post('/api/games/:code/next', requireAccount, requireGameHost, async (req, res) => {
+  const game = req.game;
+  const expected = req.body ?? {};
+  // Étape 1 : la demande est-elle bien formée ?
+  if (/* … */) {
+    return res.status(400).json({ error: 'L’état attendu est obligatoire : { state, questionIndex }.' });
+  }
+
+  await closeQuestionIfExpired(game);
+  // Étape 2 : l'animateur a-t-il cliqué sur l'état actuel de la partie ?
+  if (/* … */) {
+    return res.status(409).json({ error: 'La partie a déjà avancé.' });
+  }
+
+  // Étape 3 : la transition a-t-elle réussi ?
+  const moved = game.state === 'question' ? /* … */ : /* … */;
+  if (!moved) {
+    return res.status(409).json({ error: 'La partie a déjà avancé.' });
+  }
+
+  const state = await publicState(game.code);
+  // … la suite ne change pas
+});
+```
+
 1. **L'état attendu.** Dans `server/src/app.js`, au début de la route
    `POST /api/games/:code/next`, lisez le corps : `const expected = req.body ?? {}` (pas `state`, ce nom est déjà
    pris plus bas). Si `expected.state` n'est pas une chaîne ou si
@@ -351,6 +432,21 @@ propriété `questionIndex`. La comparaison se fait entre les deux.
    `finished`. `advance` retourne le résultat de la transition (et `false`
    si la partie est déjà terminée).
 
+   ```js
+   export async function advance(game) {
+     if (game.state === 'finished') return false;
+     const quiz = await repository.getQuizWithQuestions(game.quiz_id);
+     const from = { state: /* … */, questionIndex: /* … */ };
+     let to;
+     if (game.question_index + 1 >= quiz.questions.length) {
+       to = { state: 'finished', questionIndex: /* … */, questionStartedAt: /* … */ };
+     } else {
+       to = { state: 'question', questionIndex: /* … */, questionStartedAt: /* … */ };
+     }
+     return repository.transitionGame(/* … */);
+   }
+   ```
+
    Dans `server/src/app.js`, route `next`, gardez le résultat de
    `closeQuestion` ou d'`advance` : s'il vaut `false`, répondez `409`.
 
@@ -366,6 +462,32 @@ propriété `questionIndex`. La comparaison se fait entre les deux.
 
    Un `409` n'est pas une erreur à afficher : le nouvel état de la partie
    arrive déjà par Socket.IO.
+
+   ```js
+   // client/app/api.js
+   export function nextQuestion(code, { state, questionIndex }) {
+     return request('POST', `/api/games/${code}/next`, /* le corps */);
+   }
+   ```
+
+   ```jsx
+   // client/app/routes/game.jsx
+   const [advancing, setAdvancing] = useState(false);
+
+   async function advance() {
+     // advancing devient vrai
+     try {
+       await nextQuestion(code, game);
+     } catch {
+       // 409 : un autre clic est passé avant. L'état arrive par Socket.IO.
+     } finally {
+       // advancing redevient faux, même si l'envoi a échoué
+     }
+   }
+
+   // Sur les deux boutons de l'animateur :
+   <button onClick={advance} disabled={/* … */}>
+   ```
 
 **Vérifier.** Le double-clic : la question reste ouverte. Onglet Réseau :
 un `200`, puis un `409`, ou un seul appel si le bouton était déjà désactivé.
@@ -430,6 +552,18 @@ la plus subtile de la semaine.
    RETURNING id
    ```
 
+   La fonction garde sa forme, avec un paramètre et une valeur de plus :
+
+   ```js
+   export async function recordAnswer(gameId, playerId, questionId, choiceId, answeredAt, questionIndex) {
+     const { rows } = await pool.query(
+       `…la requête ci-dessus…`,
+       [gameId, playerId, questionId, choiceId, answeredAt, /* $6 */],
+     );
+     return rows[0]?.id ?? null;
+   }
+   ```
+
    Avant de passer à la suite, assurez-vous de pouvoir dire le rôle de
    chaque morceau : le `SELECT` extérieur, `WHERE EXISTS`, la condition sur
    `question_index`, `FOR SHARE`, `ON CONFLICT DO NOTHING`.
@@ -460,51 +594,6 @@ ligne avec `FOR SHARE`. La réponse est alors soit refusée, soit comptée,
 jamais enregistrée sans points.
 
 :::
-
-## Vérifiez votre compréhension
-
-Vous devriez pouvoir répondre à ces questions sans regarder votre code. Les
-réponses sont dans la note.
-
-1. Dans la route des réponses de la semaine 10, quelles sont les trois
-   étapes du patron fautif, et où une autre requête peut-elle s'intercaler ?
-2. `closeQuestion` utilisait déjà une transaction. Pourquoi n'empêchait-elle
-   pas la double clôture ?
-3. Deux `UPDATE … WHERE state = 'question'` arrivent en même temps. Que fait
-   le deuxième pendant que le premier s'exécute, et pourquoi son `rowCount`
-   vaut-il 0 ?
-4. Pourquoi la transition doit-elle être la première requête de la
-   transaction de clôture ?
-5. Au jalon 3, l'état attendu ne suffit pas sans l'`UPDATE` conditionnel, et
-   l'`UPDATE` conditionnel ne suffit pas sans l'état attendu. Donnez le cas
-   que chacun laisse passer seul.
-6. Pourquoi désactiver le bouton « Question suivante » pendant l'envoi ne
-   protège-t-il pas le serveur ?
-7. Sans `FOR SHARE`, que voit l'`INSERT` pendant qu'une clôture est en
-   cours ? Qu'arrive-t-il à la réponse ?
-8. Avec `FOR SHARE`, décrivez ce qui se passe si la clôture arrive en
-   premier, puis si la réponse arrive en premier.
-9. Pourquoi `FOR SHARE` plutôt que `FOR UPDATE` ?
-10. Pourquoi J4.3 passe-t-il sous SQLite même sans `FOR SHARE` ?
-11. Dans quel cas répond-on 409 plutôt que 400 ?
-
-## Pour aller plus loin
-
-- **Le même pseudonyme, deux fois.** Dans `server/src/app.js`, la route
-  `POST /api/games/:code/players` vérifie
-  `findPlayer`, puis insère. Deux joueurs qui choisissent `zoé` en même temps :
-  la contrainte `UNIQUE (game_id, nickname)` existe déjà, mais la deuxième
-  requête reçoit une erreur 500. Corrigez-la en 409, et écrivez le test.
-- **Rejoindre pendant le lancement.** Même route : `game.state !== 'lobby'`,
-  puis l'insertion. Rendez l'insertion conditionnelle, comme au jalon 4.
-- **Pourquoi pas le chat ?** Dans `server/src/realtime.js`, `nextMessageId++` lit, puis
-  écrit une variable partagée par toutes les connexions. Pourquoi deux
-  messages simultanés ne reçoivent-ils jamais le même id ?
-- **Pour le projet 2.** Écrivez le test « deux coups joués en même temps sur
-  la même position : un seul est accepté », puis faites-le passer.
-
-La solution (branche `sol-11`) a un commit par jalon, plus la démonstration
-de l'horloge du client faite en classe.
 
 ## En panne ?
 
