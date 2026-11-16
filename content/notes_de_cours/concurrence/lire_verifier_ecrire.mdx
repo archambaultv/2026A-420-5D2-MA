@@ -538,17 +538,23 @@ navigateur affiche `échéance − Date.now()`, lu sur **la sienne**. Si
 l'horloge du téléphone a 5 s d'avance, le compte à rebours affiche 5 s de
 moins.
 
-La correction : le serveur joint son heure à chaque état (`serverNow`), et
-le navigateur mesure l'écart.
+Les ordinateurs et les téléphones se synchronisent d'eux-mêmes, et l'écart
+dépasse rarement quelques dizaines de millisecondes. Mais une horloge réglée
+à la main peut avoir des minutes d'écart : le compte à rebours affiche alors
+0 dès l'ouverture de la question.
+
+La correction : le serveur envoie une **durée** plutôt qu'une heure. Une
+durée ne dépend d'aucune horloge.
 
 ```js
-const offset = game.serverNow - Date.now(); // à la réception
-const remaining = game.question.deadline - (Date.now() + offset);
+// Serveur, dans publicState
+remainingMs: deadline - Date.now(),
+
+// Navigateur, à la réception de l'état
+const localDeadline = Date.now() + game.question.remainingMs;
 ```
 
-Ce calcul néglige le délai du réseau, quelques millisecondes en classe. Le
-protocole NTP fait mieux en mesurant l'aller-retour et en le divisant par
-deux.
+Ce calcul néglige le délai du réseau, quelques millisecondes en classe.
 
 Le pointage, lui, n'a jamais dépendu du client. `answered_at` est l'heure
 du **serveur** à la réception de la réponse, et `calculateScore` n'est
