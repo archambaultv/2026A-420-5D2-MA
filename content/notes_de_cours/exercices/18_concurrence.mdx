@@ -183,7 +183,7 @@ les données : on la confie à la base, qui la vérifie au moment d'écrire.
    `INSERT` lève une exception, et la route répondrait 500. Dans
    `server/src/repository/games.js`, fonction `recordAnswer`, ajoutez
    `ON CONFLICT DO NOTHING` avant `RETURNING id`. Sans ligne insérée, `rows`
-   est vide : retournez `rows[0]?.id ?? null` (`number|null`).
+   est vide : retournez `rows[0]?.id ?? null`.
 
    ✔ **J1.2**
 
