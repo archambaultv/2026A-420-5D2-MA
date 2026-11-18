@@ -1,0 +1,417 @@
+---
+sidebar_position: 20
+sidebar_label: 19. L'animal du joueur
+description: "Quiz M9, semaine 12 : ajouter une colonne à une base qui contient déjà des parties, avec des migrations numérotées, en développement puis en production."
+---
+
+# Exercice 19 : l'animal du joueur
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre. Il demande
+**Docker Desktop**, démarré, et le dossier `deploy/` de
+l'[exercice 18](/notes_de_cours/exercices/deploiement) (jalons 1 et 2).
+
+:::
+
+Chaque joueur reçoit un animal (🦊, 🐼, 🐙…), tiré au hasard quand il
+rejoint et affiché dans le classement. Il faut donc une colonne de plus
+dans la table `player`.
+
+Aux exercices 13 et 14, un changement de schéma se réglait par
+`docker compose down -v` : on jetait la base et le serveur la recréait.
+En production, la base contient les parties des utilisateurs : on ne la
+jette pas. Cet exercice montre ce qui se passe quand on garde la base, puis
+comment la faire évoluer sans rien perdre.
+
+Tout se passe sur votre poste : la base de développement d'abord, puis la
+« prod » de `deploy/`.
+
+| Jalon | Où | Ce que vous faites | Pourquoi |
+|---|---|---|---|
+| 0 | le dépôt, `deploy/` | deux bases qui contiennent déjà des joueurs | le problème n'existe que sur une base qui a des données |
+| 1 | le dépôt | ajouter l'animal, et observer l'échec | voir que `schema.sql` ne modifie pas une table qui existe |
+| 2 | le dépôt | remplacer `schema.sql` par des migrations | faire évoluer la base de développement |
+| 3 | `deploy/` | mettre la nouvelle version en production | vérifier que la prod se migre toute seule |
+
+Note à garder ouverte : [Les migrations](/notes_de_cours/deploiement/migrations).
+
+## Jalon 0 : des joueurs avant l'animal
+
+Sur une base neuve, tout fonctionne toujours. Pour voir le problème, il
+faut une base créée par l'**ancienne** version du code, avec des données
+dedans. On en prépare deux : celle de développement et celle de la prod.
+
+Dans chacune, vous créez un joueur. C'est votre **témoin** : à la fin de
+l'exercice, il doit toujours être là, avec son score. Notez son pseudonyme.
+
+Continuez sur votre branche `sem-12` de l'exercice 18.
+
+### La base de développement
+
+À la racine du dépôt :
+
+```bash
+docker compose up -d postgres
+npm run dev
+```
+
+Au démarrage, le serveur exécute `schema.sql`, qui ne connaît pas encore
+l'animal. Si votre base existait déjà, tant mieux : c'est le cas réel.
+
+Créez une partie et rejoignez-la avec un pseudonyme.
+
+### La prod
+
+La prod de `deploy/` ne contient pas de code source : elle fait tourner des
+**images**. Pour simuler une mise à jour, il faut donc deux images, une par
+version. Le **tag** les distingue : `avant` pour le code actuel, `animal` au
+jalon 3.
+
+D'habitude, la CI construit les images et les publie
+([exercice 9](/notes_de_cours/exercices/ci_images)). Ici, on les construit
+sur le poste. Elles doivent porter le
+nom que `deploy/compose.yml` attend (`ghcr.io/${OWNER}/quizm9-api:${TAG}`).
+
+1. À la racine du dépôt :
+
+   ```bash
+   docker build -f server/Dockerfile -t ghcr.io/archambaultv/quizm9-api:avant .
+   docker build -f client/Dockerfile -t ghcr.io/archambaultv/quizm9-client:avant .
+   ```
+
+   Docker cherche une image en local avant d'aller au registre. Il trouve
+   celles-ci : il ne téléchargera rien.
+
+2. Dans `deploy/.env`, mettez `TAG=avant`. C'est cette variable qui choisit
+   la version que la prod fait tourner.
+
+3. Dans `deploy/` :
+
+   ```bash
+   docker compose down -v
+   docker compose up -d
+   ```
+
+   `down -v` efface la base de l'exercice 18 : la prod repart de votre
+   version, qui ne connaît pas l'animal.
+
+4. Sur `https://quizm9.localhost`, créez une partie et rejoignez-la avec
+   un pseudonyme.
+
+Vous avez maintenant deux bases dans l'état d'une vraie application
+déployée : un schéma ancien, et des données à conserver.
+
+## Jalon 1 : l'animal
+
+- **Fichiers** : `server/data/schema.sql`, `server/data/schema.sqlite.sql`,
+  `server/src/repository/games.js`, `server/src/app.js`,
+  `server/src/game.js`, `client/app/components/Leaderboard.jsx`,
+  `server/test/realtime.test.js`
+
+On ajoute l'animal comme on a ajouté toutes les fonctionnalités jusqu'ici,
+en modifiant `schema.sql`. Les étapes suivent le chemin de la donnée : la
+base, le dépôt de données, la route, l'état envoyé aux navigateurs,
+l'affichage.
+
+1. **La colonne.** Dans `server/data/schema.sql`, table `player`, ajoutez
+   sous `nickname` :
+
+   ```sql
+     -- L'animal du joueur, tiré au hasard quand il rejoint.
+     emoji    TEXT NOT NULL DEFAULT '🙂',
+   ```
+
+   `NOT NULL` garantit que chaque joueur a un animal. `DEFAULT '🙂'` ne
+   sert à rien pour l'instant, le serveur fournira toujours une valeur.
+   Il deviendra indispensable au jalon 2.
+
+   Faites de même dans `server/data/schema.sqlite.sql`, le schéma de ceux
+   qui travaillent sans Docker.
+
+2. **Le dépôt de données.** C'est le seul endroit qui parle SQL : il doit
+   écrire la nouvelle colonne, et la relire. Dans
+   `server/src/repository/games.js` :
+
+   - `addPlayer(gameId, nickname, emoji)` reçoit un troisième paramètre et
+     l'insère :
+
+     ```js
+     'INSERT INTO player (game_id, nickname, emoji) VALUES ($1, $2, $3) RETURNING id',
+     [gameId, nickname, emoji],
+     ```
+
+   - `getPlayers` ajoute `emoji` à son `SELECT`.
+
+3. **Le tirage.** C'est le serveur qui tire l'animal, pas le navigateur :
+   on ne fait pas confiance à ce que le client envoie. Dans
+   `server/src/app.js`, avant les routes :
+
+   ```js
+   const ANIMALS = ['🦊', '🐼', '🐙', '🦉', '🐢', '🦄', '🐝', '🐸', '🦁', '🐧', '🦖', '🐳'];
+
+   /** L'animal d'un nouveau joueur, au hasard. */
+   function randomEmoji() {
+     return ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
+   }
+   ```
+
+   Dans `POST /api/games/:code/players`, passez `randomEmoji()` à
+   `repository.addPlayer`.
+
+4. **L'état public.** L'animal est maintenant dans la base, mais le
+   navigateur ne lit pas la base : il reçoit l'objet que construit
+   `publicState`, dans `server/src/game.js`. Cette fonction recopie les
+   champs un par un, pour ne rien envoyer par accident (c'est ainsi que
+   `is_correct` reste secret). Un nouveau champ doit donc y être ajouté à
+   la main. Dans la ligne `players:`, ajoutez `emoji` :
+
+   ```js
+   players: players.map((p) => ({ nickname: p.nickname, emoji: p.emoji, score: p.score })),
+   ```
+
+5. **L'affichage.** Le composant `Leaderboard` reçoit ces joueurs et en
+   affiche le pseudonyme. Dans
+   `client/app/components/Leaderboard.jsx`, affichez l'animal devant :
+
+   ```jsx
+   {p.emoji} {p.nickname}
+   ```
+
+6. **Le test.** Dans `server/test/realtime.test.js`, le test « un joueur
+   qui rejoint » compare l'objet joueur en entier. Il échouerait : le
+   joueur a un champ de plus, dont la valeur change à chaque exécution. On
+   met donc l'animal à part : le reste se compare comme avant, et pour
+   l'animal on vérifie seulement qu'il existe. Remplacez son
+   `assert.deepEqual` par
+
+   ```js
+   const { players } = await state;
+   assert.equal(players.length, 1);
+   const { emoji, ...player } = players[0];
+   assert.deepEqual(player, { nickname: 'zoé', score: 0, online: false });
+   assert.ok(emoji, 'le joueur a un animal');
+   ```
+
+**Observer.**
+
+1. `npm test` : tous les tests passent. D'après les tests, le travail est
+   terminé.
+2. Redémarrez `npm run dev`, créez une partie et rejoignez-la : l'erreur
+   `column "emoji" of relation "player" does not exist`.
+3. Regardez la table telle qu'elle est vraiment dans votre base :
+
+   ```bash
+   docker compose exec postgres psql -U quizm9 -c "\d player"
+   ```
+
+   Pas de colonne `emoji`, alors que `schema.sql` la contient et que le
+   serveur vient de l'exécuter.
+
+**Expliquer.** Pourquoi votre base n'a-t-elle pas la colonne ? Pourquoi
+les tests passent-ils ? Voir
+[le problème](/notes_de_cours/deploiement/migrations#le-problème).
+
+`docker compose down -v` réglerait le problème sur votre poste. **Ne le faites
+pas** : en production, ce serait perdre les parties de tout le monde. Il faut
+modifier la table en place.
+
+## Jalon 2 : les migrations
+
+- **Fichiers** : `server/data/migrations/` (nouveau),
+  `server/src/repository/db-postgres.js`
+
+`schema.sql` décrit le schéma **final**. Il ne dit pas comment y arriver à
+partir d'une base plus ancienne. Une migration décrit un **changement**. On
+garde tous les changements, numérotés, et chaque base retient ceux qu'elle a
+déjà reçus. N'importe quelle base, neuve ou ancienne, peut alors être amenée à
+la dernière version.
+
+Le fichier `server/src/repository/migrate.js` est fourni : lisez son
+commentaire d'en-tête. Il reste à lui donner des migrations et à
+l'appeler.
+
+1. **La migration 001 : le schéma d'avant l'animal.**
+
+   ```bash
+   mkdir server/data/migrations
+   git mv server/data/schema.sql server/data/migrations/001_schema_initial.sql
+   ```
+
+   Dans `001_schema_initial.sql`, **supprimez** les deux lignes de la
+   colonne `emoji` (le commentaire et la colonne).
+
+   La migration 001 est le point de départ de l'historique : le schéma
+   que vos deux bases ont **déjà**. L'animal est venu après, il va donc
+   dans la migration suivante. `git mv` plutôt qu'une copie : `schema.sql`
+   ne doit plus exister, sinon on serait tenté de le modifier encore.
+
+2. **La migration 002 : l'animal.** Créez
+   `server/data/migrations/002_animal_du_joueur.sql`, une seule
+   instruction :
+
+   ```sql
+   ALTER TABLE player ADD COLUMN IF NOT EXISTS emoji TEXT NOT NULL DEFAULT '🙂';
+   ```
+
+   C'est la définition que vous venez de supprimer de la migration 001,
+   précédée de `ALTER TABLE … ADD COLUMN`.
+
+   - `ALTER TABLE` modifie la table en place : les joueurs restent.
+   - `DEFAULT '🙂'` devient indispensable : votre témoin n'a pas d'animal,
+     et `NOT NULL` exige une valeur dans chaque ligne. C'est cette valeur
+     qu'il recevra.
+   - `IF NOT EXISTS` protège une base qui aurait déjà la colonne, par
+     exemple une base recréée par le `schema.sql` du jalon 1.
+
+3. **Appeler `migrate`.** Dans `server/src/repository/db-postgres.js` :
+
+   - importez `migrate` depuis `./migrate.js` ;
+   - dans `initializeDatabase`, remplacez la ligne qui lit `schema.sql`
+     par `await migrate(pool);`.
+
+   `initializeDatabase` tourne à chaque démarrage, avant que le serveur
+   accepte une requête. Chaque base se met donc à jour toute seule, sans
+   commande à taper : celle de développement, celles des tests, et celle
+   de la prod au jalon 3.
+
+4. Redémarrez `npm run dev`.
+
+**Vérifier.** Chaque vérification permet de s'assurer que la migration fonctionne bien.
+
+- **Ce qui manque est appliqué.** Le terminal du serveur affiche deux
+  lignes :
+
+  ```
+  Migration appliquée : 001_schema_initial.sql
+  Migration appliquée : 002_animal_du_joueur.sql
+  ```
+
+  Votre base n'avait encore retenu aucune migration : elle les reçoit
+  toutes les deux.
+
+- **Le code fonctionne.** Rejoindre une partie fonctionne, avec un animal.
+
+- **Rien n'est perdu.** Votre joueur du jalon précédent est toujours là, avec son score, et a
+  reçu la valeur par défaut :
+
+  ```bash
+  docker compose exec postgres psql -U quizm9 -c "SELECT nickname, emoji, score FROM player ORDER BY id"
+  ```
+
+- **Une seule fois.** Redémarrez encore le serveur : **aucune** ligne
+  `Migration appliquée`. La base retient ce qu'elle a reçu :
+
+  ```bash
+  docker compose exec postgres psql -U quizm9 -c "SELECT * FROM schema_migration"
+  ```
+
+- **Une base neuve arrive au même schéma.** `npm test` : tout passe. Les
+  bases de test sont créées par les mêmes migrations, 001 puis 002.
+
+
+## Jalon 3 : la mise en production
+
+La prod du jalon 0 est dans l'état où était votre base de développement
+au début du jalon 2 : un schéma ancien, et un témoin. La différence : en
+production, on ne modifie pas le code sur place et personne n'ouvre `psql`
+pour corriger la base. Tout doit venir de l'image.
+
+C'est le cas : les migrations sont dans `server/`, que le `Dockerfile`
+copie dans l'image, et l'API les applique au démarrage. Déployer la
+nouvelle version, c'est donc : une nouvelle image, puis
+`docker compose up -d`.
+
+1. À la racine du dépôt, construisez les images de la nouvelle version,
+   avec le tag `animal` :
+
+   ```bash
+   docker build -f server/Dockerfile -t ghcr.io/archambaultv/quizm9-api:animal .
+   docker build -f client/Dockerfile -t ghcr.io/archambaultv/quizm9-client:animal .
+   ```
+
+   Une image est une photo du code au moment du `docker build`. L'image
+   `avant` ne contient ni l'animal ni les migrations, d'où la
+   reconstruction. Un nouveau tag plutôt que d'écraser `avant` : on sait
+   quelle version tourne, et l'ancienne reste disponible.
+
+2. Dans `deploy/.env`, mettez `TAG=animal`.
+
+3. Dans `deploy/` :
+
+   ```bash
+   docker compose up -d
+   ```
+
+   Pas de `down` : `up -d` compare ce qui tourne à ce que `compose.yml`
+   demande, et ne remplace que ce qui a changé.
+
+**Vérifier.**
+
+- L'API a migré la base de production au démarrage, sans intervention :
+
+  ```bash
+  docker compose logs api
+  ```
+
+  On y trouve les deux lignes `Migration appliquée`.
+
+- Le témoin de la prod est toujours là, avec la valeur par défaut :
+
+  ```bash
+  docker compose exec postgres psql -U quizm9 -c "SELECT nickname, emoji, score FROM player ORDER BY id"
+  ```
+
+- Sur `https://quizm9.localhost`, rejoignez une partie : le classement
+  affiche votre animal.
+
+**Expliquer.** Pourquoi `postgres` n'a-t-il pas été recréé ? Qu'est-ce qui
+aurait été perdu si la mise à jour avait demandé `docker compose down -v` ?
+
+:::tip[À retenir]
+
+En production, la base ne se jette pas. Chaque changement de schéma est
+une migration numérotée, appliquée une seule fois au démarrage. Le
+déploiement d'une nouvelle version devient : une nouvelle image, puis
+`docker compose up -d`. L'API applique elle-même ce qui manque.
+
+:::
+
+## Nettoyer
+
+Dans `deploy/` :
+
+```bash
+docker compose down -v
+```
+
+Les images construites sur le poste restent. Pour les supprimer :
+
+```bash
+docker image rm ghcr.io/archambaultv/quizm9-api:avant ghcr.io/archambaultv/quizm9-client:avant
+docker image rm ghcr.io/archambaultv/quizm9-api:animal ghcr.io/archambaultv/quizm9-client:animal
+```
+
+## En panne ?
+
+- `could not create unique index "answer_once"` au démarrage du serveur :
+  la tempête de l'exercice 17 a laissé des doublons dans votre base.
+  Remettez-la à zéro (`docker compose down -v`, puis
+  `docker compose up -d postgres`) et recréez un joueur (jalon 0).
+- `column "emoji" of relation "player" already exists` : il manque
+  `IF NOT EXISTS` dans la migration 002.
+- `ENOENT` sur `data/migrations` : le dossier est mal nommé ou mal placé.
+  Il doit être `server/data/migrations/`.
+- `manifest unknown` ou `pull access denied` à `docker compose up` :
+  Docker cherche l'image dans le registre parce qu'il ne la trouve pas en
+  local. Comparez le nom donné à `docker build -t` avec `OWNER` et `TAG`
+  dans `deploy/.env`.
+- En prod, rejoindre une partie donne `column "emoji" … does not exist` :
+  les images `animal` ont été construites avant la fin du jalon 2.
+  Reconstruisez-les, puis `docker compose up -d`.
+- En prod, le joueur du jalon 0 a un animal au hasard au lieu de 🙂 : la
+  base a été créée par des images qui connaissaient déjà l'animal. Refaites
+  le jalon 0, sans oublier `docker compose down -v`.
+- **Sans Docker (SQLite)** : les migrations sont propres à PostgreSQL. Cet
+  exercice demande Docker. Pour simplement rejouer, supprimez
+  `server/data/quizm9.db`.

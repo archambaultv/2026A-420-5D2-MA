@@ -1,0 +1,169 @@
+---
+sidebar_position: 1
+sidebar_label: Le mandataire inverse
+description: "Sortir de localhost : adresse publique, DNS, pare-feu, et un seul programme exposé qui relaie vers les conteneurs."
+---
+
+# Le mandataire inverse
+
+Sur votre poste, Quiz M9 répond à `http://localhost:5173`. Personne d'autre
+ne peut le joindre. Le mettre en ligne demande trois choses de plus :
+
+1. une **machine joignable** depuis Internet ;
+2. un **nom** que les gens tapent dans leur navigateur ;
+3. un **seul point d'entrée**, en HTTPS, qui relaie chaque requête au bon
+   conteneur : le mandataire inverse.
+
+## Une machine joignable
+
+Un **serveur privé virtuel** (VPS, ou VM chez Azure) est un ordinateur loué
+chez un hébergeur. On s'y connecte en SSH. Ce qui le distingue de votre poste :
+
+| | Votre poste | Le VPS |
+|---|---|---|
+| Adresse | `127.0.0.1`, ou une adresse privée du cégep | une **adresse IP publique** |
+| Nom | `localhost` | un nom DNS, par exemple `quizm9-alice.canadacentral.cloudapp.azure.com` |
+| Qui le joint | vous | tout Internet, y compris les robots |
+
+Le **DNS** traduit le nom en adresse IP. Chez Azure, l'adresse IP publique
+d'une VM peut recevoir gratuitement un nom en `cloudapp.azure.com`.
+
+Le **pare-feu** de l'hébergeur (chez Azure, le *groupe de sécurité
+réseau*) décide quels ports sont ouverts. Pour Quiz M9, trois suffisent :
+
+| Port | Sert à |
+|---|---|
+| 22 | SSH : vous, pour administrer la machine |
+| 80 | HTTP : la redirection vers HTTPS, et la validation du certificat |
+| 443 | HTTPS : l'application |
+
+PostgreSQL (5432), l'API (3000) et le client (5173) ne sont **pas** dans
+cette liste : ils ne parlent qu'aux autres conteneurs, sur le réseau privé
+de Docker.
+
+:::warning
+
+Une machine avec une adresse publique reçoit des visites de robots
+quelques minutes après sa mise en ligne : ils essaient des mots de passe
+SSH et des URL connues (`/wp-admin`, `/.env`). Un secret laissé à sa valeur
+par défaut est trouvé.
+
+:::
+
+## Le mandataire inverse
+
+Un **mandataire inverse** (*reverse proxy*) est un serveur placé devant
+l'application. Il reçoit toutes les requêtes, puis les relaie au bon
+service selon le chemin.
+
+```
+                     ┌──────────── réseau privé de Docker ────────────┐
+navigateur ──HTTPS──▶│ caddy :443 ──┬── /api/*, /socket.io/* ──▶ api:3000 ──▶ postgres:5432
+                     │              └── tout le reste ────────▶ client:5173
+                     └────────────────────────────────────────────────┘
+```
+
+Il prend en charge :
+
+- **un seul point d'entrée** : un seul conteneur publie des ports ;
+- **HTTPS** : il détient le certificat et déchiffre les requêtes. Derrière
+  lui, sur le réseau privé, on reste en HTTP ;
+- **le routage** : `/api/...` vers l'API, les pages vers le client ;
+- plus tard, **la répartition** entre plusieurs instances d'un même
+  service (semaine 13).
+
+Vous en avez déjà utilisé deux sans les nommer : Vite relaie `/api` en
+développement, et `client/server.js` le fait dans l'image du client.
+
+## Caddy
+
+[Caddy](https://caddyserver.com/) est un serveur web dont la configuration
+tient en quelques lignes, et qui obtient lui-même ses certificats HTTPS.
+Le `Caddyfile` de Quiz M9 :
+
+```caddy title="deploy/Caddyfile"
+{$DOMAIN} {
+	reverse_proxy /api/* api:3000
+	reverse_proxy /socket.io/* api:3000
+	reverse_proxy client:5173
+}
+```
+
+| Ligne | Rôle |
+|---|---|
+| `{$DOMAIN}` | l'adresse du site, lue dans la variable d'environnement `DOMAIN` |
+| `reverse_proxy /api/* api:3000` | les requêtes dont le chemin commence par `/api/` vont au service `api` |
+| `reverse_proxy /socket.io/* api:3000` | Socket.IO aussi, y compris la montée en WebSocket |
+| `reverse_proxy client:5173` | tout le reste : les pages |
+
+`api` et `client` sont les **noms des services** dans `compose.yml` : sur
+le réseau de Docker, chaque service joint les autres par leur nom.
+
+Caddy fait aussi, sans qu'on l'écrive :
+
+- obtenir et renouveler le certificat du nom `DOMAIN` (voir
+  [HTTPS et les certificats](/notes_de_cours/deploiement/https)) ;
+- rediriger `http://` vers `https://` ;
+- laisser passer la montée en WebSocket.
+
+## La montée en WebSocket avec nginx
+
+Une connexion WebSocket commence par une requête HTTP ordinaire, avec deux
+en-têtes (voir [le protocole](/notes_de_cours/temps_reel/protocole_websocket_theorie)) :
+
+```http
+GET /socket.io/?EIO=4&transport=websocket HTTP/1.1
+Upgrade: websocket
+Connection: Upgrade
+```
+
+Le serveur répond `101 Switching Protocols`, puis la même connexion TCP
+sert aux trames WebSocket.
+
+**Le piège.** `Upgrade` et `Connection` sont des en-têtes *de saut* : ils
+concernent une seule connexion, et un mandataire ne les retransmet pas par
+défaut. Caddy les retransmet quand même pour une montée en WebSocket.
+**nginx**, très répandu, demande trois lignes explicites :
+
+```nginx
+location /socket.io/ {
+  proxy_pass http://api:3000;
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+}
+```
+
+Sans elles, l'API reçoit une demande de montée sans `Upgrade` et répond
+`400`. L'erreur est discrète : Socket.IO se rabat sur le sondage HTTP
+(`transport=polling`) et l'application **semble** fonctionner. Seul
+l'onglet Réseau montre qu'il n'y a plus de WebSocket.
+
+## La configuration de production
+
+Le même code tourne en développement et en production. Ce qui change vit
+dans les variables d'environnement, fournies par le fichier `.env` de la
+machine :
+
+| Variable | Développement | Production |
+|---|---|---|
+| `NODE_ENV` | absente | `production` |
+| `SESSION_SECRET` | valeur par défaut, publique | longue chaîne aléatoire, **obligatoire** |
+| `GITHUB_CALLBACK_URL` | `http://localhost:5173/api/auth/callback` | `https://DOMAIN/api/auth/callback` |
+| `DOMAIN` | sans objet | le nom de la machine |
+
+Avec `NODE_ENV=production`, le cookie de session reçoit l'attribut
+`Secure` : le navigateur ne l'envoie que par HTTPS.
+
+Une application OAuth GitHub n'a qu'une URL de rappel. La machine de
+production a donc **sa propre** application OAuth, avec ses propres
+identifiants.
+
+:::tip[À retenir]
+
+En production, un seul conteneur est exposé : le mandataire inverse. Il
+tient le certificat HTTPS et relaie chaque requête au bon service selon le
+chemin. La montée en WebSocket doit être retransmise explicitement : sans
+elle, Socket.IO retombe sur le sondage sans erreur visible.
+
+:::

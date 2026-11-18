@@ -1,0 +1,333 @@
+---
+sidebar_position: 19
+sidebar_label: 18. Sortir de localhost
+description: "Quiz M9, semaine 12 : Caddy devant l'application, HTTPS sur votre poste ou sur une VM Azure."
+---
+
+# Exercice 18 : sortir de localhost
+
+:::info
+
+Ceci est un exercice formatif. Il n'y a rien à remettre. Il demande
+**Docker Desktop**, démarré.
+
+:::
+
+Cette semaine, Quiz M9 prend la forme qu'il aura en production : un seul
+conteneur exposé, Caddy, qui sert l'application en HTTPS et relaie les
+requêtes à l'API et au client.
+
+Il y a très peu de code à écrire. L'essentiel est d'**observer** ce qui
+change à chaque étape et de savoir l'expliquer.
+
+| Jalon | Où | Ce que vous faites |
+|---|---|---|
+| 0 | le dépôt | récupérer la semaine |
+| 1 | `deploy/` | lancer la « prod » sur votre poste |
+| 2 | `deploy/` | mettre Caddy devant l'application |
+| 3 | une VM Azure | *(facultatif)* un vrai certificat Let's Encrypt |
+
+Le jalon 3 utilise votre crédit **Azure for Students** (quelques dollars
+pour deux semaines). Il est facultatif. Notes à garder ouvertes :
+[Le mandataire inverse](/notes_de_cours/deploiement/mandataire_inverse),
+[HTTPS et les certificats](/notes_de_cours/deploiement/https).
+
+## Jalon 0 : récupérer la semaine
+
+Le point de départ est la solution de la semaine 11.
+
+```bash
+git checkout main
+git pull
+git checkout -b sem-12
+npm install
+```
+
+## Jalon 1 : la prod sur votre poste
+
+On reprend le dossier `deploy/` de l'[exercice 9](/notes_de_cours/exercices/ci_images) :
+`compose.yml` tire les images du registre, sans code source. Cette fois,
+on utilise les images du cours (`OWNER=archambaultv`) : pas besoin que
+votre CI ait publié les vôtres.
+
+1. Si `npm run dev` tourne, arrêtez-le : il tient les ports 3000 et 5173.
+2. Dans le dossier `deploy/`, copiez `.env.example` en `.env` :
+
+   ```bash
+   cd deploy
+   cp .env.example .env          # PowerShell : Copy-Item .env.example .env
+   ```
+
+3. Ouvrez `.env`. Laissez `OWNER`, `TAG` et `DOMAIN` tels quels. Remplacez
+   `POSTGRES_PASSWORD` et `SESSION_SECRET` par deux chaînes de votre choix.
+4. Lancez :
+
+   ```bash
+   docker compose up -d
+   docker compose ps
+   ```
+
+   `docker compose ps` liste les conteneurs de ce projet Compose. Les trois
+   services (`postgres`, `api`, `client`) doivent être `Up`, et `postgres`
+   doit être `healthy`.
+
+**Vérifier.** [http://localhost:5173](http://localhost:5173) affiche Quiz M9. Connectez-vous
+(`alice` / `alice`). [http://localhost:3000/api/quizzes](http://localhost:3000/api/quizzes) répond aussi :
+l'API est joignable directement.
+
+**Prédire.** Imaginez que ce poste soit un serveur sur Internet, et que
+`localhost` soit remplacé par son adresse publique. Notez deux problèmes.
+
+<details>
+<summary>Réponse</summary>
+
+- **Tout passe en clair (HTTP).** Sur un Wi-Fi public, un voisin lit le
+  cookie de session et le mot de passe d'`alice`.
+- **Trois portes au lieu d'une.** L'API (3000) et le client (5173) sont
+  joignables chacun de leur côté. Chaque port ouvert est une surface
+  d'attaque de plus.
+
+</details>
+
+## Jalon 2 : Caddy devant l'application
+
+- **Fichiers** : `deploy/Caddyfile` (nouveau), `deploy/compose.yml`
+- **Note** : [Caddy](/notes_de_cours/deploiement/mandataire_inverse#caddy)
+
+1. **Le `Caddyfile`.** Créez `deploy/Caddyfile` :
+
+   ```caddy title="deploy/Caddyfile"
+   {$DOMAIN} {
+   	reverse_proxy /api/* api:3000
+   	reverse_proxy /socket.io/* api:3000
+   	reverse_proxy client:5173
+   }
+   ```
+
+   Pour chaque ligne, dites à voix haute où va la requête. Le tableau de la
+   note donne la réponse.
+
+2. **Le service `caddy`.** Dans `deploy/compose.yml`, ajoutez ce service à
+   la fin de `services:`, au même niveau que `client:` :
+
+   ```yaml
+     caddy:
+       image: caddy:2
+       ports:
+         - "80:80"
+         - "443:443"
+       environment:
+         DOMAIN: ${DOMAIN}
+       volumes:
+         - ./Caddyfile:/etc/caddy/Caddyfile:ro
+         - caddy-data:/data
+       depends_on:
+         - api
+         - client
+   ```
+
+   Puis, tout en bas, déclarez le volume à côté de l'autre :
+
+   ```yaml
+   volumes:
+     quizm9-pgdata:
+     caddy-data:
+   ```
+
+3. **Fermer les autres portes.** Dans les services `api` et `client`,
+   supprimez les deux blocs `ports:`. Seul `caddy` publie des ports.
+
+4. Relancez :
+
+   ```bash
+   docker compose up -d
+   docker compose ps
+   ```
+
+**Vérifier.**
+
+- `docker compose ps` : seul `caddy` a des ports (`0.0.0.0:80`,
+  `0.0.0.0:443`).
+- [http://localhost:5173](http://localhost:5173) et [http://localhost:3000/api/quizzes](http://localhost:3000/api/quizzes) ne
+  répondent plus.
+- Tapez `http://quizm9.localhost` dans le navigateur : vous êtes redirigé
+  vers `https://quizm9.localhost`, et le navigateur affiche un
+  **avertissement** (« Votre connexion n'est pas privée » ou « Attention :
+  risque probable de sécurité »).
+- Affichez le certificat (Chrome et Edge : *Non sécurisé* à gauche de
+  l'adresse, puis *Le certificat n'est pas valide* ; Firefox : *Avancé*,
+  puis *Afficher le certificat*). Notez **qui l'a émis** et **sa durée**.
+
+**Expliquer.** La connexion est-elle chiffrée malgré l'avertissement ?
+Qu'est-ce qui manque ? (Note : [Et sur votre poste ?](/notes_de_cours/deploiement/https#et-sur-votre-poste-))
+
+Passez l'avertissement (*Continuer vers le site*) et vérifiez que Quiz M9
+fonctionne : créez une partie et rejoignez-la avec un pseudonyme.
+
+:::tip[À retenir]
+
+Caddy est maintenant le seul point d'entrée. Il a obtenu un certificat
+tout seul, à partir du seul nom `quizm9.localhost`.
+
+:::
+
+## Jalon 3 : sur une VM Azure (facultatif)
+
+- **Note** : [Let's Encrypt et le défi ACME](/notes_de_cours/deploiement/https#lets-encrypt-et-le-défi-acme)
+
+Les mêmes trois fichiers (`compose.yml`, `Caddyfile`, `.env`), sur une
+machine joignable depuis Internet. Seule la valeur de `DOMAIN` change.
+
+### 1. Créer la VM
+
+Si ce n'est pas déjà fait, créez un compte [Azure for Students](https://azure.microsoft.com/en-ca/free/students).
+
+:::warning[Trouver vos régions d'abord]
+
+Azure for Students limite vos régions (environ cinq, différentes d'un
+étudiant à l'autre). Dans une région non permise, la création échoue, ou
+le choix *Size* n'offre que des machines à 100 $/mois.
+
+1. Portail Azure, barre de recherche : *Policy*.
+2. *Authoring* → *Assignments*.
+3. Ouvrez **Allowed resource deployment regions** → *Parameters* : la
+   liste `allowedLocations` contient vos régions.
+4. Choisissez une de ces régions pour la VM. Si aucune taille B
+   n'apparaît, essayez-en une autre.
+
+:::
+
+Dans le [portail Azure](https://portal.azure.com), *Virtual machines* →
+*Create* → *Azure virtual machine* :
+
+| Champ | Valeur |
+|---|---|
+| Subscription | Azure for Students |
+| Resource group | *Create new* : `quizm9` |
+| Virtual machine name | `quizm9` |
+| Region | une région de votre liste `allowedLocations` (encadré ci-dessus) |
+| Availability options | *No infrastructure redundancy required* |
+| Image | Ubuntu Server 24.04 LTS, **x64** (pas Arm64 : les images du cours sont x64) |
+| Size | *See all sizes*, puis B2s, B1ms, B2als_v2 ou une autre taille B avec **au moins 2 Go** de mémoire |
+| Authentication type | *SSH public key*, *Generate new key pair* |
+| Public inbound ports | SSH (22), HTTP (80), HTTPS (443) |
+
+*Review + create* → *Create* → **téléchargez la clé privée** (`quizm9_key.pem`)
+et déplacez-la dans votre dossier `.ssh` (`C:\Users\USERNAME\.ssh` ou `~/.ssh`).
+Sous macOS/Linux, restreignez ses permissions, sinon `ssh` la refuse :
+`chmod 600 ~/.ssh/quizm9_key.pem`.
+
+### 2. Lui donner un nom
+
+*Go to resource* → *Overview* → cliquez sur l'**adresse IP publique**
+(*Public IP address*) → *Configuration* → *DNS name label* :
+`quizm9-votrenom` → *Save*.
+
+Le nom complet s'affiche dessous, par exemple
+`quizm9-alice.canadacentral.cloudapp.azure.com`. C'est votre `DOMAIN`.
+Dans la suite, remplacez `NOM` par ce nom complet.
+
+### 3. Installer Docker
+
+```bash
+ssh -i ~/.ssh/quizm9_key.pem azureuser@NOM
+```
+
+Sur la VM :
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+```
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+Cette commande ajoute votre utilisateur (`$USER`) au groupe `docker`
+(`-G docker`) sans le retirer de ses autres groupes (`-a`). Les membres de
+ce groupe peuvent parler au démon Docker, donc lancer `docker` sans `sudo`.
+C'est l'équivalent d'un accès root : à réserver aux comptes de confiance.
+
+```bash
+exit
+```
+
+Un nouveau groupe ne s'applique qu'à une nouvelle session. Reconnectez-vous
+(`ssh …`), puis vérifiez : `docker run --rm hello-world`.
+
+### 4. Copier les fichiers et démarrer
+
+Depuis **votre poste**, dans `deploy/` :
+
+```bash
+scp -i ~/.ssh/quizm9_key.pem compose.yml Caddyfile .env azureuser@NOM:~
+```
+
+Sur **la VM** :
+
+1. Ouvrez `.env` (`nano .env`). Mettez `DOMAIN=NOM`. Changez
+   `POSTGRES_PASSWORD` et `SESSION_SECRET` pour des valeurs aléatoires,
+   produites par `openssl rand -hex 32`. Enregistrez (`Ctrl+O`, `Entrée`,
+   `Ctrl+X`).
+2. Démarrez, puis suivez le journal de Caddy :
+
+   ```bash
+   docker compose up -d
+   docker compose logs -f caddy
+   ```
+
+   Repérez les lignes `trying to solve challenge`, puis
+   `certificate obtained successfully`. `Ctrl+C` pour quitter le journal.
+
+**Vérifier.** Ouvrez `https://NOM` **sur votre téléphone** : cadenas, sans
+rien importer. Le certificat est émis par Let's Encrypt.
+
+**Expliquer.** Au jalon 2, le navigateur affichait un avertissement.
+Pourquoi pas ici ? Et pourquoi Let's Encrypt n'aurait-il pas pu émettre ce
+certificat pour `quizm9.localhost` ?
+
+**Facultatif : « Se connecter avec GitHub ».** Créez une **nouvelle**
+application OAuth sur GitHub, avec l'URL de rappel
+`https://NOM/api/auth/callback`. Mettez ses identifiants dans le `.env` de
+la VM, puis `docker compose up -d`.
+
+## Nettoyer
+
+**Sur votre poste** : gardez `deploy/` (`compose.yml`, `Caddyfile`,
+`.env`), l'[exercice 19](/notes_de_cours/exercices/migrations) s'en sert.
+Pour arrêter, dans `deploy/` :
+
+```bash
+docker compose down        # garde les volumes (base et certificats)
+docker compose down -v     # efface aussi les volumes
+```
+
+**Sur Azure** (jalon 3) : gardez la VM si votre équipe s'en sert pour le
+projet 2. Ensuite, supprimez le **groupe de ressources** `quizm9` en
+entier : la VM, son disque et son adresse IP sont supprimés.
+
+## En panne ?
+
+- `port is already allocated` sur 80 ou 443 : un autre conteneur les
+  tient (`docker ps`, puis `docker rm -f <nom>`), ou un programme de
+  Windows. En dernier recours, publiez `"8080:80"` et `"8443:443"`, et
+  ouvrez `https://quizm9.localhost:8443`.
+- L'API redémarre en boucle, `SESSION_SECRET est obligatoire en
+  production` dans `docker compose logs api` : le fichier `.env` n'est pas
+  dans le même dossier que `compose.yml`, ou la variable est vide.
+- `502 Bad Gateway` juste après `up -d` : l'API démarre encore. Attendez
+  quelques secondes.
+- `quizm9.localhost` ne répond pas dans un terminal : seul le navigateur
+  résout `*.localhost` à coup sûr. Utilisez le navigateur.
+- **Azure : `RequestDisallowedByAzure`** à la création : la région
+  n'est pas permise pour votre abonnement. Voir l'encadré
+  [Trouver vos régions d'abord](#1-créer-la-vm).
+- **Azure : `Unable to find deployable options`**, ou seulement des tailles
+  chères : cliquez sur *See all sizes* et cherchez la série B.
+  Si elle n'y est pas, changez de région (parmi les permises).
+- **Azure : `WARNING: UNPROTECTED PRIVATE KEY FILE`** : la clé est lisible
+  par d'autres. Linux, macOS : `chmod 600 ~/.ssh/quizm9_key.pem`.
+  Windows : gardez-la dans `C:\Users\VOUS\.ssh`.
+- **Azure : Caddy n'obtient pas de certificat** (`challenge failed`,
+  `timeout`) : les ports 80 et 443 ne sont pas ouverts (*Networking* de la
+  VM), ou `DOMAIN` ne correspond pas au nom DNS.

@@ -1,0 +1,91 @@
+---
+sidebar_position: 2
+sidebar_label: HTTPS et les certificats
+description: "Ce que garantit HTTPS, ce qu'est une autorité de certification, comment Let's Encrypt vérifie un nom (le défi ACME), et l'autorité locale de Caddy."
+---
+
+# HTTPS et les certificats
+
+## Ce que HTTPS garantit
+
+HTTPS, c'est HTTP dans une connexion **TLS**. TLS apporte deux garanties :
+
+1. **La confidentialité** : les requêtes sont chiffrées. Sur le Wi-Fi du
+   cégep, un voisin ne lit ni le cookie de session ni le mot de passe.
+2. **L'authenticité** : le navigateur vérifie qu'il parle bien au serveur
+   du nom tapé, et pas à un imposteur placé au milieu.
+
+Le chiffrement seul ne suffit pas : chiffrer une conversation avec un
+imposteur ne protège rien. La deuxième garantie repose sur le
+**certificat**.
+
+## Le certificat
+
+Un certificat est un petit document **signé** qui dit : « la clé publique
+que voici appartient au nom `quizm9.example.com`, jusqu'à telle date ».
+Le serveur garde la clé privée correspondante. À chaque connexion, il
+présente le certificat et prouve qu'il détient la clé privée.
+
+Qui signe le certificat ? Une **autorité de certification** (AC). Le
+navigateur accepte un certificat s'il remonte, de signature en signature,
+jusqu'à une AC qu'il connaît d'avance :
+
+```
+ISRG Root X1                 ← AC racine, déjà dans le magasin du système
+  └─ E7                      ← AC intermédiaire (le nom varie), signée par la racine
+       └─ quizm9.example.com ← le certificat du site, signé par l'intermédiaire
+```
+
+Le **magasin de certificats** du système (ou de Firefox) contient quelques
+dizaines d'AC racines. Ce sont les seules que le navigateur accepte.
+
+Dans le navigateur, le cadenas (ou l'icône à gauche de l'adresse) affiche
+cette chaîne : qui a émis le certificat, pour quel nom, jusqu'à quand.
+
+## Let's Encrypt et le défi ACME
+
+[Let's Encrypt](https://letsencrypt.org/) est une AC gratuite, présente
+dans tous les magasins. Elle émet un certificat à quiconque **prouve qu'il
+contrôle le nom** demandé. La preuve suit le protocole **ACME** : un *défi*.
+
+Le défi **HTTP-01**, celui que Caddy essaie d'abord :
+
+1. Caddy demande un certificat pour `quizm9.example.com`.
+2. Let's Encrypt répond par un jeton aléatoire : « publiez-le à
+   `http://quizm9.example.com/.well-known/acme-challenge/<jeton>` ».
+3. Caddy sert ce fichier sur le port 80.
+4. Les serveurs de Let's Encrypt cherchent le nom dans le DNS public, se
+   connectent à l'adresse obtenue et lisent le fichier, depuis plusieurs
+   endroits du monde.
+5. Si le contenu est bon, Let's Encrypt signe le certificat.
+
+Si le port 80 est fermé, Caddy essaie le défi **TLS-ALPN-01**, qui passe
+par le port 443. L'un des deux doit être joignable depuis Internet.
+
+Le certificat ne dure que quelques semaines. Caddy le renouvelle seul, bien
+avant la fin, avec un nouveau défi. Il garde ses certificats dans son
+dossier de données, `/data` dans le conteneur. Ce dossier doit être un
+volume Docker : sinon, chaque nouveau conteneur redemande un certificat, et
+Let's Encrypt limite le nombre de certificats identiques par semaine.
+
+**Ce que le défi prouve, et ce qu'il ne prouve pas.** Il prouve que le
+demandeur contrôle la machine vers laquelle pointe le nom. Il ne dit rien
+de son identité : un site d'hameçonnage peut avoir un certificat.
+
+## Et sur votre poste ?
+
+Let's Encrypt ne peut pas joindre `localhost` ni une adresse privée : il
+n'émet aucun certificat pour eux. Pour un nom en `.localhost`, Caddy
+utilise sa propre **autorité locale** :
+
+1. Au premier démarrage, Caddy crée une AC racine, « Caddy Local
+   Authority », et sa clé privée, dans son dossier de données.
+2. Il signe lui-même le certificat de `quizm9.localhost`.
+3. Le navigateur ne connaît pas cette AC : il affiche un avertissement.
+   La connexion est chiffrée, mais son authenticité n'est pas vérifiée.
+4. Une fois la racine de Caddy ajoutée au magasin, le même certificat est
+   accepté : le cadenas apparaît.
+
+Let's Encrypt n'a rien de plus que cette autorité locale, sauf une chose :
+**sa racine est déjà dans votre magasin**.
+
