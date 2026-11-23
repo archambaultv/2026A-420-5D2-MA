@@ -1,0 +1,223 @@
+---
+sidebar_position: 1
+sidebar_label: La montée en charge
+description: "Montée en charge verticale et horizontale, services sans état, répartition entre plusieurs instances, et l'adaptateur Redis de Socket.IO."
+---
+
+# La montée en charge
+
+Quiz M9 tourne sur une machine, en un exemplaire. Tant que trente personnes
+jouent, c'est suffisant. **Monter en charge**, c'est répondre à la question :
+que fait-on quand ce ne l'est plus ?
+
+## Deux directions
+
+| | Verticale (*scale up*) | Horizontale (*scale out*) |
+|---|---|---|
+| Ce qu'on fait | une machine plus grosse | plus de machines, ou plus d'instances |
+| Changement au code | aucun | l'application doit le permettre |
+| Limite | la plus grosse machine du catalogue | en principe, aucune |
+| Pendant le changement | la machine redémarre : coupure | aucune coupure |
+| Si une machine tombe | tout tombe | les autres continuent |
+
+La montée verticale est la première à essayer : elle ne coûte que de
+l'argent. La montée horizontale apporte en plus la **tolérance aux pannes**,
+mais elle pose une condition au code.
+
+Une **instance** est un exemplaire du même programme en cours d'exécution.
+Avec Docker : un conteneur de plus, créé à partir de la même image.
+
+```yaml title="deploy/compose.yml"
+  api:
+    image: ghcr.io/${OWNER}/quizm9-api:${TAG:-latest}
+    deploy:
+      replicas: 2
+```
+
+## Le répartiteur de charge
+
+Deux instances, mais une seule adresse pour le navigateur. Le
+[mandataire inverse](/notes_de_cours/deploiement/mandataire_inverse) reçoit
+chaque requête et choisit l'instance qui la traitera : c'est la
+**répartition de charge** (*load balancing*).
+
+```
+                          ┌──▶ api (instance 1) ──┐
+navigateur ──▶ caddy :443 ┤                       ├──▶ postgres
+                          └──▶ api (instance 2) ──┘
+```
+
+```caddy title="deploy/Caddyfile"
+reverse_proxy /api/* {
+	dynamic a api 3000 {
+		refresh 2s
+	}
+	lb_policy round_robin
+	lb_try_duration 3s
+}
+```
+
+| Ligne | Rôle |
+|---|---|
+| `dynamic a api 3000` | la liste des instances vient du DNS de Docker : le nom `api` répond par une adresse par instance |
+| `refresh 2s` | la liste est redemandée toutes les 2 secondes : une instance ajoutée ou arrêtée est vue |
+| `lb_policy round_robin` | à tour de rôle : une requête à l'une, la suivante à l'autre |
+| `lb_try_duration 3s` | si l'instance choisie ne répond pas, essayer les autres pendant 3 secondes |
+
+Conséquence : deux requêtes du **même** navigateur arrivent le plus souvent
+sur deux instances **différentes**.
+
+## Un service sans état
+
+Un service est **sans état** (*stateless*) s'il ne garde rien en mémoire
+d'une requête à la suivante. Tout ce dont il a besoin arrive avec la requête
+ou se trouve dans un magasin partagé (la base de données).
+
+C'est la condition de la montée horizontale. Si l'instance 1 retient quelque
+chose dans une variable, l'instance 2 ne le sait pas.
+
+L'inventaire de Quiz M9, à la fin de la semaine 12 :
+
+| État | Où il vit | Avec deux instances |
+|---|---|---|
+| Parties, joueurs, réponses, scores | PostgreSQL | rien à faire |
+| Session de l'auteur, jeton du joueur | chez le client, [signés](/notes_de_cours/auth/session) | rien à faire, si les instances ont le même `SESSION_SECRET` |
+| Salons Socket.IO (`io.to(code)`) | mémoire de l'instance | la moitié du salon ne reçoit rien |
+| Présence (`fetchSockets`) | mémoire de l'instance | chacun ne voit que la moitié des joueurs en ligne |
+| Chat (`chats`, `nextMessageId`) | mémoire de l'instance | deux historiques, des id en double |
+| Minuteur de fin de question (`setTimeout`) | mémoire de l'instance | voir [ce qui reste](#ce-qui-reste) |
+
+Les deux premières lignes sont le résultat des semaines passées : l'état des
+parties est dans la base depuis la semaine 2, la concurrence est réglée
+[dans la base](/notes_de_cours/concurrence/lire_verifier_ecrire) depuis la
+semaine 11, et la session est un jeton signé depuis la semaine 5. C'est pour
+cela que l'API supporte presque sans effort une deuxième instance.
+
+## Où mettre l'état
+
+On ne supprime pas l'état, on le **déplace** hors de l'instance. Trois
+destinations :
+
+| Destination | Exemple dans Quiz M9 | Convient à |
+|---|---|---|
+| Le client | le cookie de session, le jeton du joueur | une identité, signée, que chaque instance peut vérifier seule |
+| La base de données | les parties, et maintenant le chat | ce qui doit durer |
+| Un magasin en mémoire partagé (Redis) | la messagerie entre instances | ce qui est éphémère et doit aller vite |
+
+Le chat suit la deuxième voie : une table `chat_message` et une colonne
+`game.chat_enabled`, ajoutées par une
+[migration](/notes_de_cours/deploiement/migrations). L'id d'un message vient
+de la base : deux instances ne peuvent plus donner le même.
+
+## Les connexions : l'état qu'on ne peut pas déplacer
+
+Une connexion WebSocket est ouverte entre **un** navigateur et **une**
+instance. On ne peut pas la ranger dans une base. Un service qui tient des
+connexions a donc toujours un état.
+
+Chaque instance de Socket.IO ne connaît que ses propres connexions. Par
+défaut, `io.to(code).emit(...)` parcourt les salons de **cette** instance,
+et `fetchSockets()` ne retourne que **ses** connexions.
+
+La solution n'est pas de regrouper les connexions, mais de **relier les
+instances**.
+
+## L'adaptateur Redis
+
+L'**adaptateur** est la pièce de Socket.IO qui sait quelles connexions sont
+dans quels salons. Celui par défaut cherche en mémoire. L'adaptateur Redis
+passe par la messagerie de [Redis](https://redis.io/), un magasin de données
+en mémoire :
+
+- `PUBLISH canal message` : envoyer un message sur un canal ;
+- `SUBSCRIBE canal` : recevoir tout ce qui y est publié.
+
+```
+instance 1 : io.to('482913').emit('state', …)
+     │
+     └─▶ PUBLISH ──▶ redis ──┬─▶ instance 1 ──▶ ses connexions du salon 482913
+                             └─▶ instance 2 ──▶ ses connexions du salon 482913
+```
+
+```js title="server/src/realtime.js"
+if (REDIS_URL) {
+  const [pub, sub] = await Promise.all([connectRedis(), connectRedis()]);
+  io.adapter(createAdapter(pub, sub));
+}
+```
+
+Deux connexions à Redis : une connexion abonnée (`SUBSCRIBE`) ne peut plus
+rien faire d'autre, il en faut une seconde pour publier.
+
+Le reste du code ne change pas :
+
+| Appel | Avec l'adaptateur Redis |
+|---|---|
+| `io.to(code).emit(...)` | tout le salon, sur toutes les instances |
+| `socket.to(code).emit(...)` | pareil, sauf cette connexion |
+| `io.in(code).fetchSockets()` | interroge toutes les instances et attend leurs réponses |
+| `io.local.to(code).emit(...)` | seulement les connexions de **cette** instance |
+
+:::warning
+
+Tout ce qui lit la mémoire de l'instance reste local, même avec l'adaptateur.
+`io.sockets.adapter.rooms.has(code)` répond « personne » quand tout le salon
+est sur l'autre instance. Quiz M9 s'en servait pour éviter une lecture
+inutile de la base : ce raccourci doit disparaître.
+
+:::
+
+Redis ne conserve rien ici : un message publié sans abonné est perdu, et
+c'est sans conséquence. Un navigateur qui se reconnecte reçoit l'état
+complet au `join` (semaine 9).
+
+## Quand une instance tombe
+
+1. Les connexions WebSocket qu'elle tenait sont coupées.
+2. Socket.IO se reconnecte tout seul, côté navigateur. Caddy envoie la
+   nouvelle connexion à une instance vivante.
+3. Le `join` renvoie l'état complet de la partie et l'historique du chat.
+
+Le joueur voit au plus une seconde d'interruption. Rien n'est perdu, parce
+que rien d'important n'était dans la mémoire de l'instance.
+
+## La session collante
+
+Une **session collante** (*sticky session*) est un réglage du répartiteur :
+toutes les requêtes d'un même client vont à la même instance.
+
+Socket.IO l'exige quand il utilise le sondage HTTP (`transport=polling`) :
+une session Socket.IO s'étale alors sur plusieurs requêtes HTTP, qui doivent
+toutes arriver à l'instance qui la connaît. Sinon, l'instance répond `400`.
+
+Quiz M9 s'en passe : le client ouvre directement un WebSocket
+(`transports: ['websocket']`), soit une seule connexion, vers une seule
+instance.
+
+Une session collante ne rend pas un service sans état : elle cache le
+problème. Si l'instance tombe, ce qu'elle retenait est perdu quand même.
+
+## Ce qui reste
+
+- **Le minuteur.** `closeAtDeadline` arme un `setTimeout` dans l'instance
+  qui a reçu « question suivante ». Si cette instance s'arrête avant
+  l'échéance, personne ne clôt la question à l'heure. Elle le sera à la
+  prochaine requête sur la partie (`closeQuestionIfExpired`). Une tâche
+  planifiée est un état comme un autre.
+- **PostgreSQL et Redis** tournent en un seul exemplaire. Ce sont des
+  **points de défaillance uniques** : s'ils tombent, tout tombe. Les
+  multiplier est un autre sujet (réplication). Chez un hébergeur, on loue
+  plutôt une base gérée.
+- **La base est la vraie limite.** Dix instances de l'API envoient toutes
+  leurs requêtes à la même base. Pour elle, la première réponse reste la
+  montée verticale.
+
+:::tip[À retenir]
+
+La montée verticale grossit la machine, la montée horizontale multiplie les
+instances. La seconde exige des services sans état : l'état va chez le
+client (signé), dans la base, ou dans un magasin partagé. Les connexions
+WebSocket restent attachées à leur instance : un adaptateur relie les
+instances pour que `io.to(...)` atteigne tout le salon.
+
+:::

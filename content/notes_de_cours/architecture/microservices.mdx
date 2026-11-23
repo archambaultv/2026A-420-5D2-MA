@@ -1,0 +1,176 @@
+---
+sidebar_position: 2
+sidebar_label: SaaS et microservices
+description: "Logiciel en tant que service, monolithe et microservices, et le service temps réel de Quiz M9 sorti de l'API."
+---
+
+# SaaS et microservices
+
+## Le logiciel en tant que service
+
+Un **logiciel en tant que service** (SaaS, *Software as a Service*) est une
+application que le client utilise par son navigateur, sans rien installer ni
+administrer. Le fournisseur l'héberge, la met à jour et la fait monter en
+charge.
+
+Ce que le client loue se décrit par niveaux :
+
+| Niveau | Le client reçoit | Le client gère encore | Vu dans le cours |
+|---|---|---|---|
+| IaaS (infrastructure) | une machine virtuelle | le système, Docker, l'application | la VM Azure de la semaine 12 |
+| PaaS (plateforme) | un service prêt à utiliser | son code, ses données | une base PostgreSQL gérée, ghcr.io, GitHub Actions |
+| SaaS (logiciel) | l'application | rien, sauf son contenu | GitHub, et Quiz M9 pour un enseignant |
+
+Un SaaS est presque toujours **multilocataire** (*multi-tenant*) : une seule
+installation sert tous les clients, et chacun ne voit que ses données. Quiz
+M9 l'est déjà : un questionnaire appartient à un compte (`quiz.account_id`),
+et l'[autorisation](/notes_de_cours/auth/autorisation) vérifie le
+propriétaire à chaque route.
+
+Pour le fournisseur, les conséquences sont celles des dernières semaines :
+
+- une seule version en production, donc des
+  [migrations](/notes_de_cours/deploiement/migrations) et jamais de base
+  jetée ;
+- des clients qui arrivent sans prévenir, donc la
+  [montée en charge](/notes_de_cours/architecture/montee_en_charge) ;
+- des mises à jour sans coupure, donc plusieurs instances.
+
+## Monolithe et microservices
+
+Un **monolithe** est une application déployée en un seul morceau : un
+programme, une image, une base. L'API de Quiz M9 en était un jusqu'ici.
+
+Une architecture en **microservices** découpe l'application en services :
+
+- chacun fait une chose et tourne dans son propre processus ;
+- chacun se déploie et se dimensionne séparément ;
+- ils se parlent par le réseau : des requêtes HTTP, ou des messages.
+
+| | Monolithe | Microservices |
+|---|---|---|
+| Déployer | une image | une par service, avec des versions à accorder |
+| Un appel entre deux parties | un appel de fonction | un message sur le réseau, qui peut échouer |
+| Dimensionner | tout ensemble | chaque service selon sa charge |
+| Une panne | tout tombe | **panne partielle** : le reste continue |
+| Comprendre un bogue | une pile d'appels | les journaux de plusieurs services |
+| Tester l'ensemble | `npm test` | il faut démarrer tous les services |
+
+Les microservices règlent des problèmes d'organisation (plusieurs équipes,
+un déploiement par équipe) et de charge (un service bien plus sollicité que
+les autres). Ils se paient en complexité. Sans l'un de ces deux problèmes,
+le monolithe reste le bon choix.
+
+## Où couper Quiz M9
+
+Une bonne frontière sépare deux parties qui n'ont **pas le même profil** :
+
+| | L'API | Le temps réel |
+|---|---|---|
+| Travail | des requêtes HTTP courtes | des connexions ouvertes pendant toute la partie |
+| État | aucun | les connexions |
+| Charge | proportionnelle aux actions | proportionnelle aux joueurs connectés |
+| Redémarrage | invisible | coupe les joueurs, qui se reconnectent |
+
+Trente joueurs qui attendent la question suivante coûtent trente connexions
+au temps réel, et rien à l'API. Les deux n'ont pas besoin du même nombre
+d'instances.
+
+```
+                     ┌── /api/* ──────▶ api ×2 ────────┬──▶ postgres
+navigateur ──▶ caddy ┤                    │ PUBLISH    │
+                     │                    ▼            │
+                     │                  redis          │
+                     │                    │ SUBSCRIBE  │
+                     └── /socket.io/* ─▶ realtime ×3 ──┘
+```
+
+Le service `realtime` est la même image que l'API, lancée par un autre point
+d'entrée :
+
+```yaml title="deploy/compose.yml"
+  realtime:
+    image: ghcr.io/${OWNER}/quizm9-api:${TAG:-latest}
+    command: ["node", "src/realtime-server.js"]
+    deploy:
+      replicas: 2
+```
+
+## L'API publie, le temps réel écoute
+
+L'API ne tient plus aucune connexion Socket.IO. Pour prévenir les
+navigateurs, elle utilise un **émetteur** (`@socket.io/redis-emitter`) : il
+n'accepte aucune connexion, il sait seulement publier dans Redis ce que
+l'adaptateur des instances `realtime` attend.
+
+Deux sortes de messages :
+
+| Appel | Destinataire | Usage dans Quiz M9 |
+|---|---|---|
+| `emitter.to(code).emit('chat:enabled', enabled)` | les **navigateurs** du salon | le chat coupé ou rouvert : l'API connaît déjà tout le contenu du message |
+| `emitter.serverSideEmit('game:changed', code)` | les **serveurs** | une partie a changé |
+
+Pourquoi l'API n'envoie-t-elle pas l'état de la partie elle-même ? Il
+contient la [présence](/notes_de_cours/temps_reel/presence), que seul le
+service temps réel connaît. L'API **annonce** donc le changement, et le
+service temps réel construit l'état :
+
+```js title="server/src/realtime.js"
+io.on('game:changed', (code) => onGameChanged(code).catch(console.error));
+
+export async function onGameChanged(code) {
+  io.local.to(code).emit('state', await stateWithPresence(code));
+}
+```
+
+`io.local` : **toutes** les instances reçoivent l'annonce. Si chacune
+répondait par `io.to(code)`, chaque navigateur recevrait l'état une fois
+par instance. Chacune prévient donc seulement ses propres connexions.
+
+Ce style de communication est **asynchrone** : l'API publie et n'attend
+rien. Si le service temps réel est arrêté, la requête HTTP réussit quand
+même. Avec un appel HTTP direct entre les deux services, l'API devrait
+attendre la réponse et gérer l'échec.
+
+## La panne partielle
+
+| Service arrêté | Ce qui continue | Ce qui échoue |
+|---|---|---|
+| `api` | les connexions, la présence, le chat | rejoindre, répondre, question suivante, les pages de l'auteur |
+| `realtime` | toutes les requêtes HTTP ; les réponses sont enregistrées | rien ne s'affiche tout seul, jusqu'à la reconnexion |
+| `redis` | les requêtes HTTP, le chat dans la base | la diffusion entre instances |
+| `postgres` | rien d'utile | tout |
+
+Avec le monolithe, les deux premières lignes n'en faisaient qu'une : tout
+s'arrêtait ensemble.
+
+## Ce que ce découpage coûte
+
+Le service temps réel de Quiz M9 est un découpage **modeste**. Ses
+compromis sont à connaître :
+
+- **Une base partagée.** Les deux services lisent les mêmes tables. Un vrai
+  microservice possède ses données, et les autres passent par lui. Ici, un
+  changement de schéma touche les deux services à la fois.
+- **Qui migre ?** Un seul service doit appliquer les migrations : l'API. Le
+  service temps réel démarre après elle (`depends_on`).
+- **Une seule image.** Les deux services partagent le dépôt et l'image. On
+  les dimensionne séparément, mais on les déploie encore ensemble.
+- **Un secret partagé.** Le service temps réel vérifie les cookies et les
+  jetons que l'API a signés : il lui faut le même `SESSION_SECRET`.
+- **Les tests.** `npm test` tourne sans Redis, dans un seul processus : il
+  ne vérifie pas que les deux services se parlent. Comme pour les
+  migrations, ce que les tests ne couvrent pas se vérifie en déployant.
+- **Le développement.** Sans `REDIS_URL` (`npm run dev`), le temps réel
+  reste greffé à l'API : un seul processus, comme avant.
+
+:::tip[À retenir]
+
+Un SaaS est une application hébergée par son fournisseur et partagée par
+tous ses clients. Les microservices découpent une application en services
+qui se déploient et se dimensionnent séparément, au prix d'un réseau entre
+eux et de pannes partielles. On coupe là où deux parties n'ont pas le même
+profil de charge. Entre deux services, un message publié (asynchrone)
+couple moins qu'un appel direct.
+
+:::
