@@ -24,12 +24,13 @@ En production, la base contient les parties des utilisateurs : on ne la
 jette pas. Cet exercice montre ce qui se passe quand on garde la base, puis
 comment la faire évoluer sans rien perdre.
 
-Tout se passe sur votre poste : la base de développement d'abord, puis la
-« prod » de `deploy/`.
+Tout se passe sur votre poste, avec deux bases distinctes : celle de
+développement (jalons 1 et 2) et celle de la « prod » de `deploy/`
+(jalon 3).
 
 | Jalon | Où | Ce que vous faites | Pourquoi |
 |---|---|---|---|
-| 0 | le dépôt, `deploy/` | deux bases qui contiennent déjà des joueurs | le problème n'existe que sur une base qui a des données |
+| 0 | le dépôt et `deploy/` | préparer les deux bases, chacune avec un joueur témoin | le problème n'existe que sur une base qui a des données |
 | 1 | le dépôt | ajouter l'animal, et observer l'échec | voir que `schema.sql` ne modifie pas une table qui existe |
 | 2 | le dépôt | remplacer `schema.sql` par des migrations | faire évoluer la base de développement |
 | 3 | `deploy/` | mettre la nouvelle version en production | vérifier que la prod se migre toute seule |
@@ -40,10 +41,21 @@ Note à garder ouverte : [Les migrations](/notes_de_cours/deploiement/migrations
 
 Sur une base neuve, tout fonctionne toujours. Pour voir le problème, il
 faut une base créée par l'**ancienne** version du code, avec des données
-dedans. On en prépare deux : celle de développement et celle de la prod.
+dedans. On en prépare deux :
 
-Dans chacune, vous créez un joueur. C'est votre **témoin** : à la fin de
-l'exercice, il doit toujours être là, avec son score. Notez son pseudonyme.
+- la base de **développement**, celle de `npm run dev`, pour les jalons 1
+  et 2 ;
+- la base de la **prod**, celle de `deploy/`, pour le jalon 3.
+
+Ce sont deux bases indépendantes, dans deux volumes Docker différents : un
+joueur créé dans l'une n'apparaît pas dans l'autre, comme en vrai. La prod
+est préparée dès maintenant parce que ses images doivent être construites
+avec le code d'avant l'animal. Ensuite, on n'y touche plus jusqu'au
+jalon 3.
+
+Dans chacune, vous créez un joueur **témoin** : à la fin de l'exercice, il
+doit toujours être là, avec son score. Pour savoir quelle base vous
+regardez, utilisez `témoin-dev` et `témoin-prod`.
 
 Continuez sur votre branche `sem-12` de l'exercice 18.
 
@@ -59,7 +71,8 @@ npm run dev
 Au démarrage, le serveur exécute `schema.sql`, qui ne connaît pas encore
 l'animal. Si votre base existait déjà, tant mieux : c'est le cas réel.
 
-Créez une partie et rejoignez-la avec un pseudonyme.
+Sur `http://localhost:5173`, créez une partie et rejoignez-la avec le
+pseudonyme `témoin-dev`.
 
 ### La prod
 
@@ -97,7 +110,7 @@ nom que `deploy/compose.yml` attend (`ghcr.io/${OWNER}/quizm9-api:${TAG}`).
    version, qui ne connaît pas l'animal.
 
 4. Sur `https://quizm9.localhost`, créez une partie et rejoignez-la avec
-   un pseudonyme.
+   le pseudonyme `témoin-prod`.
 
 Vous avez maintenant deux bases dans l'état d'une vraie application
 déployée : un schéma ancien, et des données à conserver.
@@ -292,8 +305,8 @@ l'appeler.
 
 - **Le code fonctionne.** Rejoindre une partie fonctionne, avec un animal.
 
-- **Rien n'est perdu.** Votre joueur du jalon précédent est toujours là, avec son score, et a
-  reçu la valeur par défaut :
+- **Rien n'est perdu.** `témoin-dev` est toujours là, avec son score, et
+  a reçu la valeur par défaut :
 
   ```bash
   docker compose exec postgres psql -U quizm9 -c "SELECT nickname, emoji, score FROM player ORDER BY id"
@@ -356,7 +369,7 @@ nouvelle version, c'est donc : une nouvelle image, puis
 
   On y trouve les deux lignes `Migration appliquée`.
 
-- Le témoin de la prod est toujours là, avec la valeur par défaut :
+- `témoin-prod` est toujours là, avec la valeur par défaut :
 
   ```bash
   docker compose exec postgres psql -U quizm9 -c "SELECT nickname, emoji, score FROM player ORDER BY id"
@@ -397,7 +410,7 @@ docker image rm ghcr.io/archambaultv/quizm9-api:animal ghcr.io/archambaultv/quiz
 - `could not create unique index "answer_once"` au démarrage du serveur :
   la tempête de l'exercice 17 a laissé des doublons dans votre base.
   Remettez-la à zéro (`docker compose down -v`, puis
-  `docker compose up -d postgres`) et recréez un joueur (jalon 0).
+  `docker compose up -d postgres`) et recréez `témoin-dev` (jalon 0).
 - `column "emoji" of relation "player" already exists` : il manque
   `IF NOT EXISTS` dans la migration 002.
 - `ENOENT` sur `data/migrations` : le dossier est mal nommé ou mal placé.
@@ -409,7 +422,7 @@ docker image rm ghcr.io/archambaultv/quizm9-api:animal ghcr.io/archambaultv/quiz
 - En prod, rejoindre une partie donne `column "emoji" … does not exist` :
   les images `animal` ont été construites avant la fin du jalon 2.
   Reconstruisez-les, puis `docker compose up -d`.
-- En prod, le joueur du jalon 0 a un animal au hasard au lieu de 🙂 : la
+- En prod, `témoin-prod` a un animal au hasard au lieu de 🙂 : la
   base a été créée par des images qui connaissaient déjà l'animal. Refaites
   le jalon 0, sans oublier `docker compose down -v`.
 - **Sans Docker (SQLite)** : les migrations sont propres à PostgreSQL. Cet
