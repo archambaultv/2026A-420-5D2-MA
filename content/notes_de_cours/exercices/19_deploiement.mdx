@@ -63,9 +63,14 @@ votre CI ait publié les vôtres.
 4. Lancez :
 
    ```bash
+   docker compose pull
    docker compose up -d
    docker compose ps
    ```
+
+   `docker compose pull` télécharge la version actuelle des images. Sans
+   lui, Compose réutilise une image déjà présente sur le poste (celle de
+   l'exercice 9, par exemple), même si `latest` a changé depuis.
 
    `docker compose ps` liste les conteneurs de ce projet Compose. Les trois
    services (`postgres`, `api`, `client`) doivent être `Up`, et `postgres`
